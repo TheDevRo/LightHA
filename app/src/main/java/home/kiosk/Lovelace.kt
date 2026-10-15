@@ -162,7 +162,8 @@ fun holdAct(card: JSONObject, entityId: String?): Act =
 fun doubleTapAct(card: JSONObject, entityId: String?): Act =
     card.optJSONObject("double_tap_action")?.let { parseAct(it, entityId) } ?: Act.None
 
-private fun parseAct(t: JSONObject, entityId: String?): Act {
+/** Parses one HA action object (tap_action and friends). */
+fun parseAct(t: JSONObject, entityId: String?): Act {
     val act = parseBareAct(t, entityId)
     // HA's `confirmation: true` or `confirmation: {text: ...}` asks before running.
     val confirm = t.opt("confirmation")
