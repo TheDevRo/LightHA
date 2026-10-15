@@ -5,7 +5,9 @@
 
     <!-- HA is plain http on the LAN -->
     <application
-        android:label="HA Kiosk"
+        android:label="LightHA"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity

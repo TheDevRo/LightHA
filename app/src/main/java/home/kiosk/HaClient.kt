@@ -28,10 +28,10 @@ data class Entity(val id: String, val state: String, val attributes: JSONObject,
     val name get() = attributes.optString("friendly_name", id)
 }
 
-enum class Status { CONNECTING, CONNECTED, AUTH_FAILED }
+enum class Status { NOT_CONFIGURED, CONNECTING, CONNECTED, AUTH_FAILED }
 
 /** Home Assistant WebSocket API client: auth, live entity states, service calls, request/response, lovelace_updated. */
-class HaClient(baseUrl: String, private val token: String, private val scope: CoroutineScope) {
+class HaClient(private val baseUrl: String, private val token: String, private val scope: CoroutineScope) {
     private val wsUrl = baseUrl.trimEnd('/').replaceFirst("http", "ws") + "/api/websocket"
     private val http = OkHttpClient.Builder().pingInterval(30, TimeUnit.SECONDS).build()
     private val nextId = AtomicInteger(1)
@@ -50,7 +50,13 @@ class HaClient(baseUrl: String, private val token: String, private val scope: Co
     val dashboardSaved: SharedFlow<String> = _dashboardSaved
 
     fun start() {
-        if (!stopped) ws = http.newWebSocket(Request.Builder().url(wsUrl).build(), listener)
+        if (stopped) return
+        val request = runCatching { Request.Builder().url(wsUrl).build() }.getOrNull()
+        if (baseUrl.isBlank() || token.isBlank() || request == null) {
+            _status.value = Status.NOT_CONFIGURED // blank or malformed URL: Settings asks for it
+            return
+        }
+        ws = http.newWebSocket(request, listener)
     }
 
     /** For good: used when the activity goes away or the URL/token changes. */

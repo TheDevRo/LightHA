@@ -82,10 +82,11 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                         Status.CONNECTED -> "Connected" + (haVersion?.let { " · HA $it" } ?: "")
                         Status.CONNECTING -> "Connecting…"
                         Status.AUTH_FAILED -> "Token rejected"
+                        Status.NOT_CONFIGURED -> "Enter your Home Assistant address and a long-lived access token (Profile → Security in HA)."
                     },
                     color = if (status == Status.CONNECTED) Color(0xFF81C784) else Color(0xFFE57373), fontSize = 14.sp,
                 )
-                OutlinedTextField(url, { url = it }, label = { Text("Server URL") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                OutlinedTextField(url, { url = it }, label = { Text("Server URL") }, placeholder = { Text("http://homeassistant.local:8123") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
                 OutlinedTextField(token, { token = it }, label = { Text("Long-lived access token") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                     visualTransformation = PasswordVisualTransformation())
@@ -95,7 +96,7 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 ) { Text(if (url == settings.haUrl && token == settings.haToken) "Reconnect" else "Save & reconnect") }
             }
 
-            Group("Dashboard") {
+            if (dashboards.isNotEmpty()) Group("Dashboard") {
                 dashboards.forEach { d ->
                     Row(Modifier.fillMaxWidth().clickable { lovelace.select(d.urlPath) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(d.title, color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))

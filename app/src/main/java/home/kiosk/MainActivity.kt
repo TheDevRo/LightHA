@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
@@ -138,7 +139,8 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
     var saveError by remember { mutableStateOf<String?>(null) }
     var conflict by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
+    // First launch of a release build has no server yet: start in Settings.
+    var showSettings by remember { mutableStateOf(settings.haUrl.isBlank() || settings.haToken.isBlank()) }
     var pinFor by remember { mutableStateOf<(() -> Unit)?>(null) }
     var popup by remember { mutableStateOf<String?>(null) }
     var moreInfo by remember { mutableStateOf<String?>(null) }
@@ -225,12 +227,19 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
                         Text("  " + viewTitle(views[subview!!], subview!!), color = Color.White, fontSize = 15.sp)
                     }
                 } else if (tabs.size > 1) tabs.forEachIndexed { page, v ->
+                    // Text tabs with an underline, so they don't read as badges/chips.
                     val on = page == pager.currentPage
-                    Text(
-                        viewTitle(views[v], v), color = if (on) CardBg else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                        modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) Amber else Chip)
-                            .clickable { scope.launch { pager.animateScrollToPage(page) } }.padding(horizontal = 16.dp, vertical = 9.dp),
-                    )
+                    Column(
+                        Modifier.clip(RoundedCornerShape(8.dp)).clickable { scope.launch { pager.animateScrollToPage(page) } }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            viewTitle(views[v], v), color = if (on) Color.White else TextDim, maxLines = 1,
+                            fontSize = 17.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                        Box(Modifier.padding(top = 6.dp).width(24.dp).height(3.dp).clip(RoundedCornerShape(2.dp)).background(if (on) Amber else Color.Transparent))
+                    }
                 }
             }
             if (editing) {
@@ -250,6 +259,7 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
         }
         val msg = when {
             status == Status.AUTH_FAILED -> "Home Assistant rejected the token. Open Settings to fix it."
+            status == Status.NOT_CONFIGURED -> "Not connected: set up Home Assistant in Settings."
             status != Status.CONNECTED -> "Connecting to Home Assistant…"
             else -> saveError ?: error
         }

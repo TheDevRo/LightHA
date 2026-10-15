@@ -1,3 +1,5 @@
+<img src="docs/icon.png" width="96" alt="LightHA icon">
+
 # LightHA
 
 A native Android wall-tablet app for Home Assistant. It draws your **existing HA dashboards** with Kotlin/Compose instead of a WebView, so it stays fast on old tablets (it runs on a 2014 Fire HD 6 with Android 5).
@@ -13,22 +15,34 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
 - **Tablet-side editor.** Tap the pencil (top right) to reorder, rename, remove or add cards, then save back to HA. Before saving it re-fetches the dashboard and warns if someone else changed it in the meantime.
 - **Edit on your phone.** The pencil sheet shows a QR code that opens the same dashboard in HA's editor.
 - **Live reload.** The app listens for HA's `lovelace_updated` event, so a save from anywhere updates the tablet.
+- **Multiple views.** Each view gets a tab, and you can swipe between them. Subviews and `navigate` actions work, the app reopens on the last view, and it can return to the first view after a set idle time.
+- **Universal remote card**, drawn natively. It honours your `rows` and `custom_actions`, supports hold-to-repeat, has a swipe touchpad and text entry, and sends keys the right way per platform: Fire TV through `androidtv.adb_command`, Apple TV and Android TV through `remote.send_command`.
+- **On-tablet settings** (gear icon): HA address and token, dashboard, which views show (all are on by default), return-to-first-view timer, keep screen on, fullscreen, brightness, tablet editing on/off, and an optional PIN for settings and editing.
 - **Kiosk basics.** The screen stays on, the app runs fullscreen, and it reconnects with backoff when HA drops.
 
-## Setup
+## Install
 
-1. In HA, create a long-lived access token: **Profile → Security → Long-lived access tokens**.
-2. Create `local.properties` in the project root. It's gitignored; never commit it.
-   ```properties
-   sdk.dir=/path/to/android/sdk
-   ha.url=http://homeassistant.local:8123
-   ha.token=<your long-lived token>
-   ```
-3. Build and install with the tablet connected over ADB:
-   ```sh
-   ./gradlew installDebug
-   ```
-   Needs JDK 17+ and Android SDK platform 34.
+1. Download `LightHA-<version>.apk` from [Releases](https://github.com/TheDevRo/LightHA/releases) and install it on the tablet. Android 5.0 or newer.
+2. In HA, create a long-lived access token: **Profile → Security → Long-lived access tokens**.
+3. Open LightHA. On first launch it shows Settings: enter your HA address (for example `http://homeassistant.local:8123`) and the token, then tap **Save & reconnect**.
+
+Release APKs contain no server address or token. Everything is entered on the tablet.
+
+## Build from source
+
+Create `local.properties` in the project root. It's gitignored; never commit it.
+
+```properties
+sdk.dir=/path/to/android/sdk
+# Optional: prefill debug builds so a fresh install connects right away
+ha.url=http://homeassistant.local:8123
+ha.token=<your long-lived token>
+# Optional: release signing (without these, release builds use the debug key)
+release.store=/path/to/lightha-release.jks
+release.password=<keystore password>
+```
+
+Then run `./gradlew installDebug`, or `./gradlew assembleRelease` for a shrunk, signed APK. Needs JDK 17+ and Android SDK platform 34.
 
 The app opens the dashboard with the URL path `wall-home`. To pick another one, tap the pencil and choose from the list. To edit a dashboard on the tablet, it must be a "wall" copy; the **Make a wall copy to edit here** button makes one. This keeps tablet edits from changing your main dashboards.
 
@@ -41,6 +55,7 @@ The app opens the dashboard with the URL path `wall-home`. To pick another one, 
 | Mushroom: light, entity, template, climate, number, fan, cover, lock | entity rows (templates in names aren't rendered yet) |
 | `media-control`, `custom:yet-another-media-player`, Mushroom media | media card |
 | `clock` | clock |
+| `custom:universal-remote-card` | remote |
 | `custom:bubble-card` pop-ups | bottom sheet, opened by a `#hash` action |
 
 Unsupported cards are skipped. In edit mode they show as outlined placeholders so you can see what's missing.
@@ -49,7 +64,7 @@ Each entity row shows a control that fits the domain: a switch for lights, switc
 
 ## Not yet
 
-Weather, calendar, camera/picture, graph and map cards · views beyond the first · Jinja templates in card text · HA login flow and mDNS discovery (setup uses a token for now) · drag-and-drop editing · start on boot / home-screen mode · screensaver.
+Weather, calendar, camera/picture, graph and map cards · Jinja templates in card text · HA login flow and mDNS discovery (setup uses a token for now) · drag-and-drop editing · start on boot / home-screen mode · screensaver · speaker grouping and media browsing.
 
 ## Project layout
 
@@ -61,5 +76,7 @@ Weather, calendar, camera/picture, graph and map cards · views beyond the first
 | `Cards.kt`, `Tiles.kt`, `Media.kt` | card and row rendering |
 | `MoreInfo.kt` | more-info sheet |
 | `Editor.kt` | pencil sheet, QR code, edit toolbar, entity picker |
+| `Remote.kt` | universal-remote-card and per-platform key dispatch |
+| `Settings.kt`, `SettingsScreen.kt` | on-tablet settings |
 
 The pure logic is covered by JVM unit tests: `./gradlew testDebugUnitTest`.

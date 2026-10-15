@@ -20,9 +20,37 @@ android {
         minSdk = 21
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1"
-        buildConfigField("String", "HA_URL", "\"${local.getProperty("ha.url", "http://192.168.1.51:8123")}\"")
-        buildConfigField("String", "HA_TOKEN", "\"${local.getProperty("ha.token", "")}\"")
+        versionName = "0.1.0"
+        // Release builds ship with no server or token: first launch opens Settings.
+        buildConfigField("String", "HA_URL", "\"\"")
+        buildConfigField("String", "HA_TOKEN", "\"\"")
+    }
+
+    signingConfigs {
+        // Keystore path/password live in local.properties (gitignored); without them, release falls back to debug signing.
+        local.getProperty("release.store")?.let { store ->
+            create("release") {
+                storeFile = file(store)
+                storePassword = local.getProperty("release.password")
+                keyAlias = "lightha"
+                keyPassword = local.getProperty("release.password")
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            // Dev convenience only: prefill your own server so a fresh install connects immediately.
+            buildConfigField("String", "HA_URL", "\"${local.getProperty("ha.url", "")}\"")
+            buildConfigField("String", "HA_TOKEN", "\"${local.getProperty("ha.token", "")}\"")
+            signingConfigs.findByName("release")?.let { signingConfig = it } // same key as releases, so they install over each other
+        }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+        }
     }
 
     buildFeatures {

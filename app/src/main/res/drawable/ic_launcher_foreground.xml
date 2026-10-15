@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- LightHA: a house with a glowing bulb. 108dp adaptive canvas, art inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- glow -->
+    <path android:fillColor="#40FFB74D" android:pathData="M54,43 a17,17 0 1,0 0.01,0 Z" />
+    <!-- roof + walls -->
+    <path android:strokeColor="#FFB74D" android:strokeWidth="5" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M30,52 L54,31 L78,52 M36,47 L36,78 L72,78 L72,47" />
+    <!-- bulb -->
+    <path android:fillColor="#FFB74D" android:pathData="M54,50 a9,9 0 1,0 0.01,0 Z" />
+    <path android:fillColor="#E0A040" android:pathData="M50,66 h8 v4 a2,2 0 0 1 -2,2 h-4 a2,2 0 0 1 -2,-2 Z" />
+</vector>
