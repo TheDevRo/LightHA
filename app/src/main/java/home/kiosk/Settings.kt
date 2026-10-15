@@ -17,6 +17,11 @@ class Settings(private val prefs: SharedPreferences) {
     /** Minutes without a touch before jumping back to the first view; 0 = never. */
     var returnHomeMinutes by int("return_home_minutes", 0)
     var allowTabletEditing by bool("allow_tablet_editing", true)
+    /** Minutes without a touch before the screensaver; 0 = never. */
+    var screensaverMinutes by int("screensaver_minutes", 0)
+    var screensaverBrightness by float("screensaver_brightness", 0.02f)
+    /** An HA entity (motion/presence) that wakes the screensaver when it turns on. */
+    var wakeEntity by string("wake_entity", "")
     /** Empty = no PIN. */
     var pin by string("pin", "")
     private var hidden by string("hidden_views", "")

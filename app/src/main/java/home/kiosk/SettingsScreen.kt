@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -56,6 +57,7 @@ private val Amber = Color(0xFFFFB74D)
 @Composable
 fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit, onClose: () -> Unit) {
     val status by ha.status.collectAsStateWithLifecycle()
+    val states by ha.states.collectAsStateWithLifecycle()
     val config by lovelace.config.collectAsStateWithLifecycle()
     val dashboard by lovelace.urlPath.collectAsStateWithLifecycle()
     var dashboards by remember { mutableStateOf<List<DashboardInfo>>(emptyList()) }
@@ -119,6 +121,44 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                     Choices(listOf(0 to "Never", 1 to "1 min", 2 to "2 min", 5 to "5 min", 10 to "10 min", 30 to "30 min"), settings.returnHomeMinutes) {
                         settings.returnHomeMinutes = it
                     }
+                }
+            }
+
+            Group("Kiosk") {
+                val context = LocalContext.current
+                var home by remember { mutableStateOf(KioskComponents.isHomeApp(context)) }
+                var boot by remember { mutableStateOf(KioskComponents.startsOnBoot(context)) }
+                Toggle("Use as home screen", home) { KioskComponents.setHomeApp(context, it); home = it }
+                Text(
+                    if (home) "Pick LightHA in the list that opens, then Home and reboots land on the dashboard. Turn this off and pick your old launcher to leave."
+                    else "Makes the Home button and reboots open the dashboard.",
+                    color = TextDim, fontSize = 13.sp,
+                )
+                Toggle("Start after reboot", boot) { KioskComponents.setStartOnBoot(context, it); boot = it }
+                Spacer(Modifier.height(8.dp))
+                Text("Screensaver after no touches for", color = Color.White, fontSize = 15.sp)
+                Choices(listOf(0 to "Never", 1 to "1 min", 2 to "2 min", 5 to "5 min", 10 to "10 min", 30 to "30 min"), settings.screensaverMinutes) {
+                    settings.screensaverMinutes = it
+                }
+                if (settings.screensaverMinutes > 0) {
+                    Text("Screensaver brightness", color = Color.White, fontSize = 15.sp)
+                    Slider(
+                        settings.screensaverBrightness, { settings.screensaverBrightness = it }, valueRange = 0.01f..0.5f,
+                        colors = SliderDefaults.colors(thumbColor = Amber, activeTrackColor = Amber, inactiveTrackColor = Chip),
+                    )
+                    var picking by remember { mutableStateOf(false) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Wake on motion or presence", color = Color.White, fontSize = 15.sp)
+                            Text(states[settings.wakeEntity]?.name ?: "Off", color = TextDim, fontSize = 13.sp)
+                        }
+                        if (settings.wakeEntity.isNotEmpty()) TextButton(onClick = { settings.wakeEntity = "" }) { Text("CLEAR") }
+                        OutlinedButton(onClick = { picking = true }) { Text("Choose") }
+                    }
+                    if (picking) EntityPicker(
+                        states.filterKeys { it.startsWith("binary_sensor.") || it.startsWith("input_boolean.") || it.startsWith("person.") },
+                        onPick = { settings.wakeEntity = it; picking = false }, onDismiss = { picking = false },
+                    )
                 }
             }
 

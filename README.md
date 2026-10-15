@@ -18,6 +18,11 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
 - **Multiple views.** Each view gets a tab, and you can swipe between them. Subviews and `navigate` actions work, the app reopens on the last view, and it can return to the first view after a set idle time.
 - **Universal remote card**, drawn natively. It honours your `rows` and `custom_actions`, supports hold-to-repeat, has a swipe touchpad and text entry, and sends keys the right way per platform: Fire TV through `androidtv.adb_command`, Apple TV and Android TV through `remote.send_command`.
 - **On-tablet settings** (gear icon): HA address and token, dashboard, which views show (all are on by default), return-to-first-view timer, keep screen on, fullscreen, brightness, tablet editing on/off, and an optional PIN for settings and editing.
+- **Kiosk mode** (Settings → Kiosk):
+  - **Use as home screen:** the Home button and reboots open the dashboard.
+  - **Start after reboot:** for when you don't use home-screen mode.
+  - **Screensaver:** after a set idle time, a black screen with a dim clock that moves every minute to avoid burn-in, at its own low brightness. Any tap wakes it.
+  - **Wake on motion or presence:** pick an HA entity; when it turns on, the screensaver wakes.
 - **Kiosk basics.** The screen stays on, the app runs fullscreen, and it reconnects with backoff when HA drops.
 
 ## Install
@@ -64,7 +69,7 @@ Each entity row shows a control that fits the domain: a switch for lights, switc
 
 ## Not yet
 
-Weather, calendar, camera/picture, graph and map cards · Jinja templates in card text · HA login flow and mDNS discovery (setup uses a token for now) · drag-and-drop editing · start on boot / home-screen mode · screensaver · speaker grouping and media browsing.
+Weather, calendar, camera/picture, graph and map cards · Jinja templates in card text · HA login flow and mDNS discovery (setup uses a token for now) · drag-and-drop editing · speaker grouping and media browsing.
 
 ## Project layout
 
@@ -76,6 +81,7 @@ Weather, calendar, camera/picture, graph and map cards · Jinja templates in car
 | `Cards.kt`, `Tiles.kt`, `Media.kt` | card and row rendering |
 | `MoreInfo.kt` | more-info sheet |
 | `Editor.kt` | pencil sheet, QR code, edit toolbar, entity picker |
+| `Kiosk.kt` | home-screen mode, start on boot, screensaver |
 | `Remote.kt` | universal-remote-card and per-platform key dispatch |
 | `Settings.kt`, `SettingsScreen.kt` | on-tablet settings |
 

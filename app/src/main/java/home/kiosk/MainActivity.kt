@@ -107,12 +107,19 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) applyWindow()
     }
 
+    /** True while the screensaver is showing: it dims the screen to its own brightness. */
+    var saverActive = false
+
     /** Screen-on, brightness and fullscreen from [Settings]. */
     fun applyWindow() {
         if (settings.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.attributes = window.attributes.apply {
-            screenBrightness = if (settings.brightness < 0) WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE else settings.brightness
+            screenBrightness = when {
+                saverActive -> settings.screensaverBrightness
+                settings.brightness < 0 -> WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                else -> settings.brightness
+            }
         }
         WindowCompat.getInsetsController(window, window.decorView).run {
             if (settings.fullscreen) hide(WindowInsetsCompat.Type.systemBars()) else show(WindowInsetsCompat.Type.systemBars())
@@ -150,7 +157,11 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
     var renaming by remember { mutableStateOf<Triple<Int, Int, Int>?>(null) }
     var addingTo by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
-    LaunchedEffect(settings.keepScreenOn, settings.brightness, settings.fullscreen) { activity.applyWindow() }
+    var saver by remember { mutableStateOf(false) }
+    LaunchedEffect(settings.keepScreenOn, settings.brightness, settings.fullscreen, saver, settings.screensaverBrightness) {
+        activity.saverActive = saver
+        activity.applyWindow()
+    }
 
     val editing = draft != null
     val cfg = draft ?: config
@@ -185,6 +196,20 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
                 pager.animateScrollToPage(0)
             }
         }
+    }
+
+    // Screensaver after N idle minutes (not while editing or with a sheet open).
+    LaunchedEffect(settings.screensaverMinutes) {
+        while (settings.screensaverMinutes > 0) {
+            delay(5_000)
+            val busy = draft != null || popup != null || moreInfo != null || sheet || showSettings
+            if (!saver && shouldStartSaver(System.currentTimeMillis() - lastTouch[0], settings.screensaverMinutes, busy)) saver = true
+        }
+    }
+    // Wake when the chosen motion/presence entity turns on.
+    val wakeState = states[settings.wakeEntity]?.state
+    LaunchedEffect(wakeState) {
+        if (wakeState == "on" || wakeState == "home" || wakeState == "detected") { saver = false; lastTouch[0] = System.currentTimeMillis() }
     }
 
     fun guarded(action: () -> Unit) { if (settings.pin.isEmpty()) action() else pinFor = action }
@@ -272,6 +297,8 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
             }
         }
     }
+
+    if (saver) Screensaver(onWake = { saver = false; lastTouch[0] = System.currentTimeMillis() })
 
     pinFor?.let { action ->
         PinDialog("Enter PIN", onDismiss = { pinFor = null }) { if (it == settings.pin) { pinFor = null; action(); true } else false }
