@@ -85,12 +85,43 @@ fun nudgedTarget(e: Entity, up: Boolean): Double? {
 
 /** "2026-10-16T13:06:27+00:00" -> local "6:06 AM", with the weekday when it isn't today. */
 fun timeText(iso: String, now: Date = Date()): String {
-    val clean = iso.replace(Regex("""\.\d+"""), "").replace(Regex("""([+-]\d\d):(\d\d)$"""), "$1$2").replace(Regex("Z$"), "+0000")
-    val date = runCatching { SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).parse(clean) }.getOrNull() ?: return iso
+    val date = parseIso(iso) ?: return iso
     val day = SimpleDateFormat("yyyyMMdd", Locale.US)
     val pattern = if (day.format(date) == day.format(now)) "h:mm a" else "EEE h:mm a"
     return SimpleDateFormat(pattern, Locale.getDefault()).format(date)
 }
+
+/** HA's ISO timestamps ("2026-10-16T13:06:27.123+00:00") without java.time, which needs API 26. */
+fun parseIso(iso: String): Date? {
+    val clean = iso.replace(Regex("""\.\d+"""), "").replace(Regex("""([+-]\d\d):(\d\d)$"""), "$1$2").replace(Regex("Z$"), "+0000")
+    return runCatching { SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).parse(clean) }.getOrNull()
+}
+
+// media_player supported_features bits (homeassistant/components/media_player/const.py)
+const val MP_PAUSE = 1
+const val MP_SEEK = 2
+const val MP_VOLUME_SET = 4
+const val MP_PREVIOUS = 16
+const val MP_NEXT = 32
+const val MP_PLAY = 16384
+
+fun supports(e: Entity, flag: Int) = e.attributes.optLong("supported_features") and flag.toLong() != 0L
+
+/** Seconds into the track right now: HA only reports position at the last update, so add elapsed time while playing. */
+fun mediaPosition(e: Entity, now: Date = Date()): Double? {
+    val pos = e.attributes.optNum("media_position") ?: return null
+    if (e.state != "playing") return pos
+    val at = parseIso(e.attributes.optString("media_position_updated_at")) ?: return pos
+    val dur = e.attributes.optNum("media_duration") ?: Double.MAX_VALUE
+    return (pos + (now.time - at.time) / 1000.0).coerceIn(0.0, dur)
+}
+
+/** Which of a card's players to show first: one that's playing, then paused, then the first. */
+fun activePlayer(ids: List<String>, states: Map<String, Entity>): String? =
+    ids.firstOrNull { states[it]?.state == "playing" } ?: ids.firstOrNull { states[it]?.state == "paused" } ?: ids.firstOrNull()
+
+/** 222 -> "3:42". */
+fun clockText(seconds: Double): String = "%d:%02d".format(Locale.US, seconds.toInt() / 60, seconds.toInt() % 60)
 
 private fun weatherText(state: String) = when (state) {
     "partlycloudy" -> "Partly cloudy"

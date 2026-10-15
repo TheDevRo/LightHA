@@ -42,10 +42,11 @@ class CardContext(
     val onLock: (Entity, String) -> Unit,
     val openPopup: (String) -> Unit,
     val openMoreInfo: (String) -> Unit,
+    val confirm: (String, () -> Unit) -> Unit,
     /** Edit mode shows hidden and unsupported cards (dimmed) so they can be found and removed. */
     val editing: Boolean,
 ) {
-    fun copy(editing: Boolean) = CardContext(states, call, onLock, openPopup, openMoreInfo, editing)
+    fun copy(editing: Boolean) = CardContext(states, call, onLock, openPopup, openMoreInfo, confirm, editing)
 
     /** Runs a resolved card action; null for Default, which the caller decides. */
     fun runner(act: Act, entityId: String?): (() -> Unit)? = when (act) {
@@ -54,6 +55,7 @@ class CardContext(
         Act.MoreInfo -> entityId?.let { id -> { openMoreInfo(id) } } ?: ({})
         is Act.Popup -> ({ openPopup(act.hash) })
         is Act.Service -> ({ call(act.domain, act.service, act.ids, act.data) })
+        is Act.Confirm -> runner(act.then, entityId)?.let { run -> { confirm(act.text, run) } }
     }
 }
 
@@ -109,6 +111,7 @@ private fun CardBody(card: JSONObject, ctx: CardContext, top: Boolean) {
             }
         }
         type == "clock" -> Clock()
+        isMediaCard(card) -> MediaCard(card, ctx)
         isPopup(card) -> if (ctx.editing) Placeholder("Pop-up · ${popupTitle(card)}", top)
         type in ENTITY_CARDS && card.has("entity") -> Surface(top) { EntityCard(card, ctx) }
         type == "button" -> Surface(top) { ActionButton(card, ctx) }
@@ -136,11 +139,16 @@ private fun EntityCard(card: JSONObject, ctx: CardContext) {
 }
 
 /** Entity-less button card: a name that runs its tap_action (e.g. camera PTZ presets). */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ActionButton(card: JSONObject, ctx: CardContext) {
     val run = ctx.runner(tapAct(card, null), null)
     Box(
-        Modifier.fillMaxWidth().clickable(enabled = run != null) { run?.invoke() }.padding(16.dp),
+        Modifier.fillMaxWidth().combinedClickable(
+            onClick = { run?.invoke() },
+            onLongClick = card.optJSONObject("hold_action")?.let { ctx.runner(holdAct(card, null), null) },
+            onDoubleClick = card.optJSONObject("double_tap_action")?.let { ctx.runner(doubleTapAct(card, null), null) },
+        ).padding(16.dp),
     ) { Text(cardName(card) ?: "Button", color = Color.White, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
 }
 
@@ -164,7 +172,11 @@ fun Badges(badges: List<JSONObject>, ctx: CardContext) {
             Text(
                 text, color = Color.White, fontSize = 13.sp, maxLines = 1,
                 modifier = Modifier.clip(RoundedCornerShape(50)).background(Chip)
-                    .combinedClickable(onClick = tap, onLongClick = ctx.runner(holdAct(b, e.id), e.id))
+                    .combinedClickable(
+                        onClick = tap,
+                        onLongClick = ctx.runner(holdAct(b, e.id), e.id),
+                        onDoubleClick = b.optJSONObject("double_tap_action")?.let { ctx.runner(doubleTapAct(b, e.id), e.id) },
+                    )
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             )
         }

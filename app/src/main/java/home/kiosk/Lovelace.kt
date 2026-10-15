@@ -132,6 +132,7 @@ sealed interface Act {
     data class Popup(val hash: String) : Act
     data object None : Act
     data object MoreInfo : Act
+    data class Confirm(val text: String, val then: Act) : Act
     /** No tap_action (or more-info): the kiosk's own default for the entity kind. */
     data object Default : Act
 }
@@ -147,6 +148,16 @@ fun doubleTapAct(card: JSONObject, entityId: String?): Act =
     card.optJSONObject("double_tap_action")?.let { parseAct(it, entityId) } ?: Act.None
 
 private fun parseAct(t: JSONObject, entityId: String?): Act {
+    val act = parseBareAct(t, entityId)
+    // HA's `confirmation: true` or `confirmation: {text: ...}` asks before running.
+    val confirm = t.opt("confirmation")
+    if (act is Act.Service && (confirm == true || confirm is JSONObject)) {
+        return Act.Confirm((confirm as? JSONObject)?.optString("text").orEmpty().ifEmpty { "Are you sure?" }, act)
+    }
+    return act
+}
+
+private fun parseBareAct(t: JSONObject, entityId: String?): Act {
     return when (t.optString("action")) {
         "toggle" -> entityId?.let { Act.Service("homeassistant", "toggle", listOf(it), null) } ?: Act.None
         "navigate" -> t.optString("navigation_path").takeIf { it.startsWith("#") }?.let { Act.Popup(it) } ?: Act.None

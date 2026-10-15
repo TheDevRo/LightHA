@@ -37,6 +37,14 @@ class LovelaceTest {
         assertEquals(Act.None, doubleTapAct(j("""{"entity":"light.a"}"""), "light.a"))
     }
 
+    @Test fun confirmationWrapsServiceCalls() {
+        val c = tapAct(j("""{"tap_action":{"action":"perform-action","perform_action":"script.bedtime","confirmation":{"text":"Start bedtime?"}}}"""), null)
+        assertEquals("Start bedtime?", (c as Act.Confirm).text)
+        assertTrue(c.then is Act.Service)
+        assertTrue(tapAct(j("""{"tap_action":{"action":"toggle","confirmation":true}}"""), "lock.door") is Act.Confirm)
+        assertEquals(Act.MoreInfo, tapAct(j("""{"tap_action":{"action":"more-info","confirmation":true}}"""), "x.y")) // only for things that do something
+    }
+
     @Test fun agoText() {
         val now = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", java.util.Locale.US).parse("2026-10-15T22:30:00+0000")!!
         assertEquals("5 min ago", ago("2026-10-15T22:25:00.123+00:00", now))

@@ -51,7 +51,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONArray
 import org.json.JSONObject
-import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
@@ -268,8 +267,7 @@ private fun fmt(d: Double) = if (d == Math.rint(d)) d.toLong().toString() else S
 /** "2026-10-15T22:30:00+00:00" -> "5 min ago" (relative to [now]). */
 internal fun ago(iso: String, now: Date = Date()): String {
     if (iso.isEmpty()) return ""
-    val clean = iso.replace(Regex("""\.\d+"""), "").replace(Regex("""([+-]\d\d):(\d\d)$"""), "$1$2").replace(Regex("Z$"), "+0000")
-    val t = runCatching { SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).parse(clean) }.getOrNull() ?: return ""
+    val t = parseIso(iso) ?: return ""
     val min = (now.time - t.time) / 60_000
     return when {
         min < 1 -> "just now"

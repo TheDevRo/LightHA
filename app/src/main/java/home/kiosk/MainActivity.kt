@@ -101,6 +101,7 @@ private fun Home(ha: HaClient, lovelace: Lovelace) {
     var sheet by remember { mutableStateOf(false) }
     var popup by remember { mutableStateOf<String?>(null) }
     var moreInfo by remember { mutableStateOf<String?>(null) }
+    var confirmAct by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var confirmLock by remember { mutableStateOf<Pair<Entity, String>?>(null) }
     var renaming by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var addingTo by remember { mutableStateOf<Int?>(null) }
@@ -108,7 +109,7 @@ private fun Home(ha: HaClient, lovelace: Lovelace) {
     val editing = draft != null
     val shown = draft ?: config
     val call = Call { domain, service, ids, data -> ha.callService(domain, service, ids, data) }
-    val ctx = CardContext(states, call, { e, s -> confirmLock = e to s }, { popup = it }, { moreInfo = it }, editing)
+    val ctx = CardContext(states, call, { e, s -> confirmLock = e to s }, { popup = it }, { moreInfo = it }, { text, run -> confirmAct = text to run }, editing)
 
     LazyVerticalStaggeredGrid(
         columns = StaggeredGridCells.Adaptive(300.dp),
@@ -190,6 +191,15 @@ private fun Home(ha: HaClient, lovelace: Lovelace) {
         confirmButton = { TextButton(onClick = { conflict = false; draft = null; scope.launch { lovelace.load() } }) { Text("RELOAD") } },
         dismissButton = { TextButton(onClick = { conflict = false }) { Text("KEEP EDITING") } },
     )
+
+    confirmAct?.let { (text, run) ->
+        AlertDialog(
+            onDismissRequest = { confirmAct = null },
+            title = { Text(text) },
+            confirmButton = { TextButton(onClick = { run(); confirmAct = null }) { Text("YES") } },
+            dismissButton = { TextButton(onClick = { confirmAct = null }) { Text("CANCEL") } },
+        )
+    }
 
     confirmLock?.let { (e, service) ->
         AlertDialog(
