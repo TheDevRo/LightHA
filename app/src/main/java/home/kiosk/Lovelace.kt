@@ -81,21 +81,35 @@ class Lovelace(private val ha: HaClient, private val scope: CoroutineScope, priv
 
 fun JSONArray.objects(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
 
-/** First view's sections as card lists; a masonry view is one section. */
-fun sectionsOf(config: JSONObject): List<List<JSONObject>> {
-    val view = config.optJSONArray("views")?.optJSONObject(0) ?: return emptyList()
+fun viewsOf(config: JSONObject): List<JSONObject> = config.optJSONArray("views")?.objects().orEmpty()
+
+/** Stable id for a view: its URL path, else its position. Used for show/hide and "last view". */
+fun viewKey(view: JSONObject, index: Int) = view.optString("path").ifEmpty { index.toString() }
+
+fun viewTitle(view: JSONObject, index: Int) = view.optString("title").ifEmpty { view.optString("path").ifEmpty { "View ${index + 1}" } }
+
+/** Which view a `navigate` path points at: "/wall-home/living-room", "living-room" or "1". */
+fun viewIndexFor(config: JSONObject, path: String): Int? {
+    val last = path.trimEnd('/').substringAfterLast('/')
+    val views = viewsOf(config)
+    return views.indices.firstOrNull { viewKey(views[it], it) == last }
+}
+
+/** A view's sections as card lists; a masonry view is one section. */
+fun sectionsOf(config: JSONObject, viewIndex: Int = 0): List<List<JSONObject>> {
+    val view = config.optJSONArray("views")?.optJSONObject(viewIndex) ?: return emptyList()
     view.optJSONArray("sections")?.let { s -> return s.objects().map { it.optJSONArray("cards")?.objects().orEmpty() } }
     return listOf(view.optJSONArray("cards")?.objects().orEmpty())
 }
 
-fun badgesOf(config: JSONObject): List<JSONObject> =
-    config.optJSONArray("views")?.optJSONObject(0)?.optJSONArray("badges")?.objects().orEmpty()
+fun badgesOf(config: JSONObject, viewIndex: Int = 0): List<JSONObject> =
+    config.optJSONArray("views")?.optJSONObject(viewIndex)?.optJSONArray("badges")?.objects().orEmpty()
 
 fun isPopup(card: JSONObject) = card.optString("type") == "custom:bubble-card" && card.optString("card_type") == "pop-up"
 
-/** Bubble-card pop-ups by hash ("#pop-up-calendar" → its cards). */
+/** Bubble-card pop-ups by hash ("#pop-up-calendar" → its cards), from every view. */
 fun popupsOf(config: JSONObject): Map<String, List<JSONObject>> =
-    sectionsOf(config).flatten().filter(::isPopup)
+    viewsOf(config).indices.flatMap { sectionsOf(config, it).flatten() }.filter(::isPopup)
         .associate { it.optString("hash") to it.optJSONArray("cards")?.objects().orEmpty() }
 
 fun popupTitle(card: JSONObject) = card.optString("name").ifEmpty {
@@ -107,7 +121,7 @@ fun visible(card: JSONObject, states: Map<String, Entity>): Boolean =
     card.optJSONArray("visibility")?.objects()?.all { met(it, card.optString("entity"), states) } ?: true
 
 private fun met(c: JSONObject, defaultEntity: String, states: Map<String, Entity>): Boolean {
-    val state = states[c.optString("entity").ifEmpty { defaultEntity }]?.state
+    val state = states[c.optString("entity").ifEmpty { c.optString("entity_id") }.ifEmpty { defaultEntity }]?.state
     fun matches(x: Any?) = if (x is JSONArray) (0 until x.length()).any { x.optString(it) == state } else x?.toString() == state
     val subs = c.optJSONArray("conditions")?.objects().orEmpty()
     return when (c.optString("condition")) {
@@ -130,6 +144,7 @@ private fun met(c: JSONObject, defaultEntity: String, states: Map<String, Entity
 sealed interface Act {
     data class Service(val domain: String, val service: String, val ids: List<String>, val data: JSONObject?) : Act
     data class Popup(val hash: String) : Act
+    data class View(val path: String) : Act
     data object None : Act
     data object MoreInfo : Act
     data class Confirm(val text: String, val then: Act) : Act
@@ -160,7 +175,13 @@ private fun parseAct(t: JSONObject, entityId: String?): Act {
 private fun parseBareAct(t: JSONObject, entityId: String?): Act {
     return when (t.optString("action")) {
         "toggle" -> entityId?.let { Act.Service("homeassistant", "toggle", listOf(it), null) } ?: Act.None
-        "navigate" -> t.optString("navigation_path").takeIf { it.startsWith("#") }?.let { Act.Popup(it) } ?: Act.None
+        "navigate" -> t.optString("navigation_path").let { p ->
+            when {
+                p.startsWith("#") -> Act.Popup(p)
+                p.isNotEmpty() -> Act.View(p)
+                else -> Act.None
+            }
+        }
         "perform-action", "call-service" -> {
             val svc = t.optString("perform_action").ifEmpty { t.optString("service") }
             if ('.' !in svc) return Act.None
@@ -196,14 +217,14 @@ fun packRows(cards: List<JSONObject>): List<List<JSONObject>> {
 
 /** Tablet-editor operations. Each returns an edited copy; the input is never mutated. */
 object Edits {
-    private fun cardsArray(config: JSONObject, section: Int): JSONArray {
-        val view = config.getJSONArray("views").getJSONObject(0)
+    private fun cardsArray(config: JSONObject, view: Int, section: Int): JSONArray {
+        val view = config.getJSONArray("views").getJSONObject(view)
         return view.optJSONArray("sections")?.getJSONObject(section)?.getJSONArray("cards") ?: view.getJSONArray("cards")
     }
 
-    private fun edit(config: JSONObject, section: Int, change: (MutableList<JSONObject>) -> Unit): JSONObject {
+    private fun edit(config: JSONObject, view: Int, section: Int, change: (MutableList<JSONObject>) -> Unit): JSONObject {
         val copy = JSONObject(config.toString())
-        val arr = cardsArray(copy, section)
+        val arr = cardsArray(copy, view, section)
         val list = arr.objects().toMutableList()
         change(list)
         while (arr.length() > 0) arr.remove(0)
@@ -211,16 +232,16 @@ object Edits {
         return copy
     }
 
-    fun move(config: JSONObject, section: Int, index: Int, delta: Int) = edit(config, section) {
+    fun move(config: JSONObject, view: Int, section: Int, index: Int, delta: Int) = edit(config, view, section) {
         val to = (index + delta).coerceIn(0, it.lastIndex)
         it.add(to, it.removeAt(index))
     }
 
-    fun remove(config: JSONObject, section: Int, index: Int) = edit(config, section) { it.removeAt(index) }
+    fun remove(config: JSONObject, view: Int, section: Int, index: Int) = edit(config, view, section) { it.removeAt(index) }
 
-    fun add(config: JSONObject, section: Int, card: JSONObject) = edit(config, section) { it += card }
+    fun add(config: JSONObject, view: Int, section: Int, card: JSONObject) = edit(config, view, section) { it += card }
 
-    fun rename(config: JSONObject, section: Int, index: Int, name: String) = edit(config, section) {
+    fun rename(config: JSONObject, view: Int, section: Int, index: Int, name: String) = edit(config, view, section) {
         val card = it[index]
         val key = if (card.optString("type") == "custom:mushroom-template-card") "primary" else "name"
         if (name.isBlank()) card.remove(key) else card.put(key, name)

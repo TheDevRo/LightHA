@@ -4,8 +4,11 @@ import android.content.Context
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,11 +22,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,6 +44,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,7 +53,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,45 +66,70 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
+private val Amber = Color(0xFFFFB74D)
+
 class MainActivity : ComponentActivity() {
+    private lateinit var settings: Settings
+    private var ha: HaClient? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        hideSystemBars()
+        val prefs = getSharedPreferences("kiosk", Context.MODE_PRIVATE)
+        settings = Settings(prefs)
+        applyWindow()
 
-        val ha = HaClient(BuildConfig.HA_URL, BuildConfig.HA_TOKEN, lifecycleScope)
-        val lovelace = Lovelace(ha, lifecycleScope, getSharedPreferences("kiosk", Context.MODE_PRIVATE))
+        val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope).also { this.ha = it }
+        val lovelace = Lovelace(ha, lifecycleScope, prefs)
         ha.start()
 
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFFFFB74D), onPrimary = CardBg, background = Bg, surface = Bg)) {
-                Box(Modifier.fillMaxSize().background(Bg)) { Home(ha, lovelace) }
+            CompositionLocalProvider(LocalSettings provides settings) {
+                MaterialTheme(colorScheme = darkColorScheme(primary = Amber, onPrimary = CardBg, background = Bg, surface = Bg)) {
+                    Box(Modifier.fillMaxSize().background(Bg)) { Home(ha, lovelace, onReconnect = ::recreate) }
+                }
             }
         }
+    }
+
+    override fun onDestroy() {
+        ha?.stop()
+        super.onDestroy()
     }
 
     // Sheets and dialogs bring the bars back; hide them again whenever the dashboard regains focus.
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemBars()
+        if (hasFocus) applyWindow()
     }
 
-    private fun hideSystemBars() = WindowCompat.getInsetsController(window, window.decorView).run {
-        hide(WindowInsetsCompat.Type.systemBars())
-        systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    /** Screen-on, brightness and fullscreen from [Settings]. */
+    fun applyWindow() {
+        if (settings.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.attributes = window.attributes.apply {
+            screenBrightness = if (settings.brightness < 0) WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE else settings.brightness
+        }
+        WindowCompat.getInsetsController(window, window.decorView).run {
+            if (settings.fullscreen) hide(WindowInsetsCompat.Type.systemBars()) else show(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Home(ha: HaClient, lovelace: Lovelace) {
+private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
+    val settings = LocalSettings.current
+    val activity = LocalContext.current as MainActivity
     val states by ha.states.collectAsStateWithLifecycle()
     val status by ha.status.collectAsStateWithLifecycle()
     val config by lovelace.config.collectAsStateWithLifecycle()
     val error by lovelace.error.collectAsStateWithLifecycle()
+    val dashboard by lovelace.urlPath.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     // Edit mode = a draft copy of the config; null when just viewing.
@@ -99,63 +138,133 @@ private fun Home(ha: HaClient, lovelace: Lovelace) {
     var saveError by remember { mutableStateOf<String?>(null) }
     var conflict by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    var pinFor by remember { mutableStateOf<(() -> Unit)?>(null) }
     var popup by remember { mutableStateOf<String?>(null) }
     var moreInfo by remember { mutableStateOf<String?>(null) }
+    var subview by remember { mutableStateOf<Int?>(null) }
     var confirmAct by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var confirmLock by remember { mutableStateOf<Pair<Entity, String>?>(null) }
-    var renaming by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    var addingTo by remember { mutableStateOf<Int?>(null) }
+    var renaming by remember { mutableStateOf<Triple<Int, Int, Int>?>(null) }
+    var addingTo by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+
+    LaunchedEffect(settings.keepScreenOn, settings.brightness, settings.fullscreen) { activity.applyWindow() }
 
     val editing = draft != null
-    val shown = draft ?: config
-    val call = Call { domain, service, ids, data -> ha.callService(domain, service, ids, data) }
-    val ctx = CardContext(states, call, { e, s -> confirmLock = e to s }, { popup = it }, { moreInfo = it }, { text, run -> confirmAct = text to run }, editing)
+    val cfg = draft ?: config
+    val views = cfg?.let(::viewsOf).orEmpty()
+    // Tabs: every non-subview view the user hasn't switched off. Shown by default.
+    val tabs = views.indices.filter { !views[it].optBoolean("subview") && !settings.isViewHidden(dashboard, viewKey(views[it], it)) }
+        .ifEmpty { views.indices.take(1) }
+    val pager = rememberPagerState { tabs.size }
+    val currentView = subview ?: tabs.getOrNull(pager.currentPage) ?: 0
 
-    LazyVerticalStaggeredGrid(
-        columns = StaggeredGridCells.Adaptive(300.dp),
-        contentPadding = PaddingValues(20.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalItemSpacing = 16.dp,
-    ) {
-        item(span = StaggeredGridItemSpan.FullLine) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val msg = when {
-                    status == Status.AUTH_FAILED -> "HA token rejected"
-                    status != Status.CONNECTED -> "Connecting…"
-                    else -> saveError ?: error
-                }
-                Text(msg ?: "", color = Color(0xFFE57373), fontSize = 14.sp, modifier = Modifier.weight(1f))
-                if (editing) {
-                    TextButton(onClick = { draft = null; saveError = null }) { Text("CANCEL") }
-                    Spacer(Modifier.width(8.dp))
-                    Button(onClick = {
-                        scope.launch {
-                            runCatching { lovelace.save(draft!!, original!!) }
-                                .onSuccess { ok -> if (ok) { draft = null; saveError = null } else conflict = true }
-                                .onFailure { saveError = "Save failed: ${it.message}" }
-                        }
-                    }) { Text("SAVE") }
-                } else {
-                    IconButton(onClick = { sheet = true }) { Icon(Icons.Rounded.Edit, "Edit dashboard", tint = TextDim) }
-                }
+    // Reopen on the last view, then remember where we are.
+    var restored by remember(dashboard) { mutableStateOf(false) }
+    LaunchedEffect(tabs, restored) {
+        if (!restored && tabs.isNotEmpty()) {
+            pager.scrollToPage(tabs.indexOfFirst { viewKey(views[it], it) == settings.lastView }.coerceAtLeast(0))
+            restored = true
+        }
+    }
+    LaunchedEffect(pager.currentPage, restored) {
+        if (restored) tabs.getOrNull(pager.currentPage)?.let { settings.lastView = viewKey(views[it], it) }
+    }
+
+    // Return to the first view after N idle minutes.
+    val lastTouch = remember { longArrayOf(System.currentTimeMillis()) }
+    LaunchedEffect(settings.returnHomeMinutes) {
+        val limit = settings.returnHomeMinutes * 60_000L
+        while (limit > 0) {
+            delay(10_000)
+            val idle = System.currentTimeMillis() - lastTouch[0] > limit
+            if (idle && draft == null && (pager.currentPage != 0 || subview != null)) {
+                subview = null; popup = null; moreInfo = null
+                pager.animateScrollToPage(0)
             }
         }
-        shown?.let { cfg ->
-            item(span = StaggeredGridItemSpan.FullLine) { Badges(badgesOf(cfg), ctx) }
-            sectionsOf(cfg).forEachIndexed { s, cards ->
-                item(key = "section$s") {
-                    Section(
-                        cards, ctx,
-                        edit = if (!editing) null else SectionEdits(
-                            move = { i, d -> draft = Edits.move(draft!!, s, i, d) },
-                            remove = { i -> draft = Edits.remove(draft!!, s, i) },
-                            rename = { i -> renaming = s to i },
-                            add = { addingTo = s },
-                        ),
+    }
+
+    fun guarded(action: () -> Unit) { if (settings.pin.isEmpty()) action() else pinFor = action }
+    fun openView(path: String) {
+        val idx = cfg?.let { viewIndexFor(it, path) } ?: return
+        if (idx in tabs) { subview = null; scope.launch { pager.animateScrollToPage(tabs.indexOf(idx)) } } else subview = idx
+    }
+
+    if (showSettings) {
+        BackHandler { showSettings = false }
+        SettingsScreen(settings, ha, lovelace, onReconnect, onClose = { showSettings = false })
+        return
+    }
+    BackHandler(enabled = subview != null) { subview = null }
+
+    val call = Call { domain, service, ids, data -> ha.callService(domain, service, ids, data) }
+    val ctx = CardContext(states, call, { e, s -> confirmLock = e to s }, { popup = it }, { moreInfo = it }, { text, run -> confirmAct = text to run }, ::openView, editing)
+    val editsFor = { view: Int, section: Int ->
+        if (!editing) null else SectionEdits(
+            move = { i, d -> draft = Edits.move(draft!!, view, section, i, d) },
+            remove = { i -> draft = Edits.remove(draft!!, view, section, i) },
+            rename = { i -> renaming = Triple(view, section, i) },
+            add = { addingTo = view to section },
+        )
+    }
+
+    Column(
+        Modifier.fillMaxSize().pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) { awaitPointerEvent(PointerEventPass.Initial); lastTouch[0] = System.currentTimeMillis() }
+            }
+        },
+    ) {
+        // Header: view tabs on the left; settings + pencil (or Cancel/Save while editing) on the right.
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (subview != null) {
+                    Row(Modifier.clip(RoundedCornerShape(50)).clickable { subview = null }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = Color.White)
+                        Text("  " + viewTitle(views[subview!!], subview!!), color = Color.White, fontSize = 15.sp)
+                    }
+                } else if (tabs.size > 1) tabs.forEachIndexed { page, v ->
+                    val on = page == pager.currentPage
+                    Text(
+                        viewTitle(views[v], v), color = if (on) CardBg else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) Amber else Chip)
+                            .clickable { scope.launch { pager.animateScrollToPage(page) } }.padding(horizontal = 16.dp, vertical = 9.dp),
                     )
                 }
             }
+            if (editing) {
+                TextButton(onClick = { draft = null; saveError = null }) { Text("CANCEL") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = {
+                    scope.launch {
+                        runCatching { lovelace.save(draft!!, original!!) }
+                            .onSuccess { ok -> if (ok) { draft = null; saveError = null } else conflict = true }
+                            .onFailure { saveError = "Save failed: ${it.message}" }
+                    }
+                }) { Text("SAVE") }
+            } else {
+                IconButton(onClick = { guarded { showSettings = true } }) { Icon(Icons.Rounded.Settings, "Settings", tint = TextDim) }
+                IconButton(onClick = { guarded { sheet = true } }) { Icon(Icons.Rounded.Edit, "Edit dashboard", tint = TextDim) }
+            }
         }
+        val msg = when {
+            status == Status.AUTH_FAILED -> "Home Assistant rejected the token. Open Settings to fix it."
+            status != Status.CONNECTED -> "Connecting to Home Assistant…"
+            else -> saveError ?: error
+        }
+        msg?.let { Text(it, color = Color(0xFFE57373), fontSize = 14.sp, modifier = Modifier.padding(horizontal = 20.dp)) }
+
+        if (cfg != null) {
+            if (subview != null) ViewPage(cfg, subview!!, ctx, editsFor)
+            else HorizontalPager(pager, Modifier.weight(1f), userScrollEnabled = !editing, key = { tabs.getOrElse(it) { it } }) { page ->
+                ViewPage(cfg, tabs[page], ctx, editsFor)
+            }
+        }
+    }
+
+    pinFor?.let { action ->
+        PinDialog("Enter PIN", onDismiss = { pinFor = null }) { if (it == settings.pin) { pinFor = null; action(); true } else false }
     }
 
     if (sheet) DashboardSheet(
@@ -165,7 +274,7 @@ private fun Home(ha: HaClient, lovelace: Lovelace) {
     )
 
     popup?.let { hash ->
-        val cards = shown?.let { popupsOf(it)[hash] }.orEmpty()
+        val cards = cfg?.let { popupsOf(it)[hash] }.orEmpty()
         ModalBottomSheet(onDismissRequest = { popup = null }, containerColor = Bg) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 cards.forEach { CardView(it, ctx.copy(editing = false)) }
@@ -175,13 +284,13 @@ private fun Home(ha: HaClient, lovelace: Lovelace) {
 
     moreInfo?.let { id -> MoreInfoSheet(id, states, call, onDismiss = { moreInfo = null }) }
 
-    renaming?.let { (s, i) ->
-        val card = sectionsOf(draft!!)[s][i]
-        RenameDialog(cardLabel(card, states), onDone = { draft = Edits.rename(draft!!, s, i, it); renaming = null }, onDismiss = { renaming = null })
+    renaming?.let { (v, s, i) ->
+        val card = sectionsOf(draft!!, v)[s][i]
+        RenameDialog(cardLabel(card, states), onDone = { draft = Edits.rename(draft!!, v, s, i, it); renaming = null }, onDismiss = { renaming = null })
     }
 
-    addingTo?.let { s ->
-        EntityPicker(states, onPick = { draft = Edits.add(draft!!, s, Edits.cardFor(it)); addingTo = null }, onDismiss = { addingTo = null })
+    addingTo?.let { (v, s) ->
+        EntityPicker(states, onPick = { draft = Edits.add(draft!!, v, s, Edits.cardFor(it)); addingTo = null }, onDismiss = { addingTo = null })
     }
 
     if (conflict) AlertDialog(
@@ -211,8 +320,24 @@ private fun Home(ha: HaClient, lovelace: Lovelace) {
     }
 }
 
-class SectionEdits(val move: (Int, Int) -> Unit, val remove: (Int) -> Unit, val rename: (Int) -> Unit, val add: () -> Unit)
+/** One view: badges, then its sections in a staggered grid. */
+@Composable
+private fun ViewPage(cfg: JSONObject, view: Int, ctx: CardContext, editsFor: (Int, Int) -> SectionEdits?) {
+    LazyVerticalStaggeredGrid(
+        columns = StaggeredGridCells.Adaptive(300.dp),
+        contentPadding = PaddingValues(20.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalItemSpacing = 16.dp,
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        item(span = StaggeredGridItemSpan.FullLine) { Badges(badgesOf(cfg, view), ctx) }
+        sectionsOf(cfg, view).forEachIndexed { s, cards ->
+            item(key = "v$view-s$s") { Section(cards, ctx, editsFor(view, s)) }
+        }
+    }
+}
 
+class SectionEdits(val move: (Int, Int) -> Unit, val remove: (Int) -> Unit, val rename: (Int) -> Unit, val add: () -> Unit)
 
 /** One HA section: cards packed into rows of the 12-column grid. [edit] non-null = edit mode. */
 @Composable
@@ -239,4 +364,3 @@ private fun Section(cards: List<JSONObject>, ctx: CardContext, edit: SectionEdit
         }
     }
 }
-

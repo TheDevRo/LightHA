@@ -1,0 +1,210 @@
+package home.kiosk
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.json.JSONObject
+
+private val Amber = Color(0xFFFFB74D)
+
+/** Full-screen on-tablet settings. [onReconnect] restarts the HA connection after URL/token changes. */
+@Composable
+fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit, onClose: () -> Unit) {
+    val status by ha.status.collectAsStateWithLifecycle()
+    val config by lovelace.config.collectAsStateWithLifecycle()
+    val dashboard by lovelace.urlPath.collectAsStateWithLifecycle()
+    var dashboards by remember { mutableStateOf<List<DashboardInfo>>(emptyList()) }
+    var haVersion by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(status) {
+        if (status == Status.CONNECTED) {
+            dashboards = runCatching { lovelace.dashboards() }.getOrDefault(dashboards)
+            haVersion = runCatching { (ha.request("get_config") as JSONObject).optString("version") }.getOrNull()
+        }
+    }
+
+    Column(Modifier.fillMaxSize().background(Bg)) {
+        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = Color.White) }
+            Text("Settings", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 40.dp).widthIn(max = 640.dp)) {
+
+            Group("Home Assistant") {
+                var url by remember { mutableStateOf(settings.haUrl) }
+                var token by remember { mutableStateOf(settings.haToken) }
+                Text(
+                    when (status) {
+                        Status.CONNECTED -> "Connected" + (haVersion?.let { " · HA $it" } ?: "")
+                        Status.CONNECTING -> "Connecting…"
+                        Status.AUTH_FAILED -> "Token rejected"
+                    },
+                    color = if (status == Status.CONNECTED) Color(0xFF81C784) else Color(0xFFE57373), fontSize = 14.sp,
+                )
+                OutlinedTextField(url, { url = it }, label = { Text("Server URL") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                OutlinedTextField(token, { token = it }, label = { Text("Long-lived access token") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = PasswordVisualTransformation())
+                Button(
+                    enabled = url.isNotBlank() && token.isNotBlank(),
+                    onClick = { settings.haUrl = url.trim(); settings.haToken = token.trim(); onReconnect() },
+                ) { Text(if (url == settings.haUrl && token == settings.haToken) "Reconnect" else "Save & reconnect") }
+            }
+
+            Group("Dashboard") {
+                dashboards.forEach { d ->
+                    Row(Modifier.fillMaxWidth().clickable { lovelace.select(d.urlPath) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(d.title, color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                        if (d.urlPath == dashboard) Icon(Icons.Rounded.Check, null, tint = Amber)
+                    }
+                }
+            }
+
+            config?.let { cfg ->
+                Group("Views") {
+                    Text("Switched-off views don't get a tab, but cards can still open them.", color = TextDim, fontSize = 13.sp)
+                    viewsOf(cfg).forEachIndexed { i, v ->
+                        val key = viewKey(v, i)
+                        Toggle(viewTitle(v, i) + if (v.optBoolean("subview")) " (subview)" else "", !settings.isViewHidden(dashboard, key)) {
+                            settings.setViewHidden(dashboard, key, !it)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("Return to the first view after no touches for", color = Color.White, fontSize = 15.sp)
+                    Choices(listOf(0 to "Never", 1 to "1 min", 2 to "2 min", 5 to "5 min", 10 to "10 min", 30 to "30 min"), settings.returnHomeMinutes) {
+                        settings.returnHomeMinutes = it
+                    }
+                }
+            }
+
+            Group("Display") {
+                Toggle("Keep screen on", settings.keepScreenOn) { settings.keepScreenOn = it }
+                Toggle("Fullscreen (hide status and navigation bars)", settings.fullscreen) { settings.fullscreen = it }
+                Toggle("Use system brightness", settings.brightness < 0) { settings.brightness = if (it) -1f else 0.8f }
+                if (settings.brightness >= 0) {
+                    Slider(
+                        settings.brightness, { settings.brightness = it }, valueRange = 0.05f..1f,
+                        colors = SliderDefaults.colors(thumbColor = Amber, activeTrackColor = Amber, inactiveTrackColor = Chip),
+                    )
+                }
+            }
+
+            Group("Editing & security") {
+                Toggle("Allow editing dashboards on this tablet", settings.allowTabletEditing) { settings.allowTabletEditing = it }
+                var settingPin by remember { mutableStateOf(false) }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("PIN for settings and editing", color = Color.White, fontSize = 15.sp)
+                        Text(if (settings.pin.isEmpty()) "Off" else "On", color = TextDim, fontSize = 13.sp)
+                    }
+                    if (settings.pin.isEmpty()) OutlinedButton(onClick = { settingPin = true }) { Text("Set PIN") }
+                    else OutlinedButton(onClick = { settings.pin = "" }) { Text("Remove") }
+                }
+                if (settingPin) PinDialog(title = "Choose a PIN", onDismiss = { settingPin = false }) { settings.pin = it; settingPin = false; true }
+            }
+
+            Group("About") {
+                Text("LightHA ${BuildConfig.VERSION_NAME}", color = Color.White, fontSize = 15.sp)
+                Text("github.com/TheDevRo/LightHA", color = TextDim, fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+/** Asks for a PIN; [onPin] returns whether it was accepted (wrong PINs keep the dialog open). */
+@Composable
+fun PinDialog(title: String, onDismiss: () -> Unit, onPin: (String) -> Boolean) {
+    var pin by remember { mutableStateOf("") }
+    var wrong by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                pin, { pin = it.filter(Char::isDigit).take(8); wrong = false },
+                singleLine = true, isError = wrong, label = { Text(if (wrong) "Wrong PIN" else "4–8 digits") },
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            )
+        },
+        confirmButton = { TextButton(enabled = pin.length >= 4, onClick = { wrong = !onPin(pin) }) { Text("OK") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL") } },
+    )
+}
+
+@Composable
+private fun Group(title: String, content: @Composable () -> Unit) {
+    Spacer(Modifier.height(24.dp))
+    Text(title.uppercase(), color = TextDim, fontSize = 12.sp, letterSpacing = 1.5.sp)
+    Spacer(Modifier.height(8.dp))
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardBg).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        content()
+    }
+}
+
+@Composable
+private fun Toggle(label: String, on: Boolean, set: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { set(!on) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        Switch(on, set, colors = SwitchDefaults.colors(checkedTrackColor = Amber, checkedThumbColor = CardBg, uncheckedTrackColor = Chip, uncheckedBorderColor = Chip))
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun Choices(options: List<Pair<Int, String>>, selected: Int, pick: (Int) -> Unit) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { (value, label) ->
+            val on = value == selected
+            Text(
+                label, color = if (on) CardBg else Color.White, fontSize = 14.sp,
+                modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) Amber else Chip).clickable { pick(value) }
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+            )
+        }
+    }
+}

@@ -187,9 +187,11 @@ private val imageCache = LruCache<String, ImageBitmap>(12)
 
 /** Loads an HA-relative or absolute image URL, downsampled to ~600px. Null while loading or on failure. */
 @Composable
-fun rememberImage(url: String?): ImageBitmap? = produceState(url?.let(imageCache::get), url) {
+fun rememberImage(url: String?): ImageBitmap? {
+    val base = LocalSettings.current.haUrl.trimEnd('/')
+    return produceState(url?.let(imageCache::get), url) {
     if (url == null || value != null) return@produceState
-    val full = if (url.startsWith("/")) BuildConfig.HA_URL.trimEnd('/') + url else url
+    val full = if (url.startsWith("/")) base + url else url
     value = withContext(Dispatchers.IO) {
         runCatching {
             val bytes = imageHttp.newCall(Request.Builder().url(full).build()).execute().use { it.body!!.bytes() }
@@ -200,4 +202,5 @@ fun rememberImage(url: String?): ImageBitmap? = produceState(url?.let(imageCache
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
         }.getOrNull()
     }?.also { imageCache.put(url, it) }
-}.value
+    }.value
+}

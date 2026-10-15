@@ -63,13 +63,29 @@ class LovelaceTest {
     private fun types(c: JSONObject) = sectionsOf(c)[0].map { it.getString("type") }
 
     @Test fun editsReturnCopiesAndKeepUnknownFields() {
-        assertEquals(listOf("b", "a", "c"), types(Edits.move(cfg, 0, 0, 1)))
-        assertEquals(listOf("a", "c"), types(Edits.remove(cfg, 0, 1)))
-        assertEquals(listOf("a", "b", "c", "tile"), types(Edits.add(cfg, 0, Edits.cardFor("light.x"))))
-        val renamed = Edits.rename(cfg, 0, 2, "Hall")
+        assertEquals(listOf("b", "a", "c"), types(Edits.move(cfg, 0, 0, 0, 1)))
+        assertEquals(listOf("a", "c"), types(Edits.remove(cfg, 0, 0, 1)))
+        assertEquals(listOf("a", "b", "c", "tile"), types(Edits.add(cfg, 0, 0, Edits.cardFor("light.x"))))
+        val renamed = Edits.rename(cfg, 0, 0, 2, "Hall")
         assertEquals("Hall", sectionsOf(renamed)[0][2].getString("name"))
         assertTrue(sectionsOf(renamed)[0][2].getJSONObject("custom_option").getBoolean("keep"))
         assertEquals(listOf("a", "b", "c"), types(cfg)) // original untouched
+    }
+
+    @Test fun viewsAndNavigation() {
+        val c = j("""{"views":[{"title":"Home","sections":[{"cards":[{"type":"a"}]}]},{"title":"Living Room","path":"living-room","cards":[{"type":"b"}]}]}""")
+        assertEquals(listOf("0", "living-room"), viewsOf(c).mapIndexed { i, v -> viewKey(v, i) })
+        assertEquals(1, viewIndexFor(c, "/wall-home/living-room"))
+        assertEquals(0, viewIndexFor(c, "0"))
+        assertEquals(null, viewIndexFor(c, "/elsewhere/nope"))
+        assertEquals("b", sectionsOf(c, 1)[0][0].getString("type")) // masonry view = one section
+        assertEquals(Act.View("/wall-home/living-room"), tapAct(j("""{"tap_action":{"action":"navigate","navigation_path":"/wall-home/living-room"}}"""), null))
+        assertEquals(listOf("b", "x"), sectionsOf(Edits.add(c, 1, 0, j("""{"type":"x"}""")), 1)[0].map { it.getString("type") })
+    }
+
+    @Test fun visibilityAcceptsEntityId() {
+        val states = mapOf("climate.ac" to e("climate.ac", "off"))
+        assertFalse(visible(j("""{"visibility":[{"condition":"not","conditions":[{"condition":"state","entity_id":"climate.ac","state":["off"]}]}]}"""), states))
     }
 
     @Test fun popupsByHash() {

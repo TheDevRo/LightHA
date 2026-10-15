@@ -43,10 +43,11 @@ class CardContext(
     val openPopup: (String) -> Unit,
     val openMoreInfo: (String) -> Unit,
     val confirm: (String, () -> Unit) -> Unit,
+    val openView: (String) -> Unit,
     /** Edit mode shows hidden and unsupported cards (dimmed) so they can be found and removed. */
     val editing: Boolean,
 ) {
-    fun copy(editing: Boolean) = CardContext(states, call, onLock, openPopup, openMoreInfo, confirm, editing)
+    fun copy(editing: Boolean) = CardContext(states, call, onLock, openPopup, openMoreInfo, confirm, openView, editing)
 
     /** Runs a resolved card action; null for Default, which the caller decides. */
     fun runner(act: Act, entityId: String?): (() -> Unit)? = when (act) {
@@ -54,6 +55,7 @@ class CardContext(
         Act.None -> ({})
         Act.MoreInfo -> entityId?.let { id -> { openMoreInfo(id) } } ?: ({})
         is Act.Popup -> ({ openPopup(act.hash) })
+        is Act.View -> ({ openView(act.path) })
         is Act.Service -> ({ call(act.domain, act.service, act.ids, act.data) })
         is Act.Confirm -> runner(act.then, entityId)?.let { run -> { confirm(act.text, run) } }
     }

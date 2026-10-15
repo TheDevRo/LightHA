@@ -64,7 +64,7 @@ fun DashboardSheet(lovelace: Lovelace, onEditHere: () -> Unit, onDismiss: () -> 
 
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = CardBg) {
         Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-            val editUrl = "${BuildConfig.HA_URL.trimEnd('/')}/$current/0?edit=1"
+            val editUrl = "${LocalSettings.current.haUrl.trimEnd('/')}/$current/0?edit=1"
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(remember(editUrl) { qr(editUrl) }, null, Modifier.size(140.dp).clip(RoundedCornerShape(12.dp)))
                 Spacer(Modifier.width(20.dp))
@@ -72,7 +72,9 @@ fun DashboardSheet(lovelace: Lovelace, onEditHere: () -> Unit, onDismiss: () -> 
                     Text("Edit on your phone", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                     Text("Scan to open this dashboard in Home Assistant's editor. The tablet updates when you save.", color = TextDim, fontSize = 13.sp)
                     Spacer(Modifier.height(12.dp))
-                    if (lovelace.editable) {
+                    if (!LocalSettings.current.allowTabletEditing) {
+                        Text("Editing on this tablet is off (Settings).", color = TextDim, fontSize = 12.sp)
+                    } else if (lovelace.editable) {
                         Button(onClick = onEditHere) { Text("Edit on this tablet") }
                     } else {
                         val info = dashboards.firstOrNull { it.urlPath == current }

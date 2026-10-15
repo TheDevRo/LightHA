@@ -38,6 +38,7 @@ class HaClient(baseUrl: String, private val token: String, private val scope: Co
     private val pending = ConcurrentHashMap<Int, CompletableDeferred<JSONObject>>()
     @Volatile private var ws: WebSocket? = null
     @Volatile private var getStatesId = -1
+    @Volatile private var stopped = false
     private var backoffMs = 1_000L
 
     private val _states = MutableStateFlow<Map<String, Entity>>(emptyMap())
@@ -49,7 +50,13 @@ class HaClient(baseUrl: String, private val token: String, private val scope: Co
     val dashboardSaved: SharedFlow<String> = _dashboardSaved
 
     fun start() {
-        ws = http.newWebSocket(Request.Builder().url(wsUrl).build(), listener)
+        if (!stopped) ws = http.newWebSocket(Request.Builder().url(wsUrl).build(), listener)
+    }
+
+    /** For good: used when the activity goes away or the URL/token changes. */
+    fun stop() {
+        stopped = true
+        ws?.close(1000, null)
     }
 
     fun callService(domain: String, service: String, entityIds: List<String>, data: JSONObject? = null) {
@@ -128,6 +135,7 @@ class HaClient(baseUrl: String, private val token: String, private val scope: Co
     }
 
     private fun reconnect() {
+        if (stopped) return
         _status.value = Status.CONNECTING
         pending.values.forEach { it.completeExceptionally(IOException("disconnected")) }
         val wait = backoffMs
