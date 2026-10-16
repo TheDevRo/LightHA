@@ -1,5 +1,11 @@
 package home.kiosk
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -161,6 +167,19 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                     onPick = { settings.wakeEntity = it; picking = false }, onDismiss = { picking = false },
                 )
                 Text("Wakes when it turns on (motion, a room's lights, someone home) and sleeps when it turns off, unless the screen was touched in the last minute.", color = TextDim, fontSize = 13.sp)
+                val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { settings.cameraMotion = it }
+                Toggle("Wake on camera motion", settings.cameraMotion) { on ->
+                    val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                    if (on && !granted) askCamera.launch(Manifest.permission.CAMERA) else settings.cameraMotion = on
+                }
+                if (settings.cameraMotion) {
+                    Text("Sensitivity", color = Color.White, fontSize = 15.sp)
+                    Choices(listOf(15 to "Low", 6 to "Medium", 2 to "High"), settings.motionSensitivity) { settings.motionSensitivity = it }
+                    Text(
+                        "Compares tiny grayscale snapshots once a second. Nothing is saved or sent. Also reports binary_sensor.kiosk_${Build.DEVICE.lowercase()}_motion to Home Assistant (admin token only).",
+                        color = TextDim, fontSize = 13.sp,
+                    )
+                }
             }
 
             Group("Display") {

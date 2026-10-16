@@ -13,6 +13,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -121,6 +123,13 @@ class HaClient(private val baseUrl: String, private val token: String, private v
             val body = r.body!!.string()
             if (body.trimStart().startsWith("[")) JSONArray(body) else JSONObject(body)
         }
+    }
+
+    /** Authenticated REST POST (e.g. /api/states to publish the tablet's own sensors). */
+    suspend fun postJson(path: String, body: JSONObject) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val req = Request.Builder().url(baseUrl.trimEnd('/') + path).header("Authorization", "Bearer $token")
+            .post(body.toString().toRequestBody("application/json".toMediaType())).build()
+        http.newCall(req).execute().use { r -> if (!r.isSuccessful) throw IOException("POST $path: HTTP ${r.code}") }
     }
 
     private fun send(type: String, fill: JSONObject.() -> Unit = {}): Int {

@@ -1,7 +1,12 @@
 package home.kiosk
 
 import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.PowerManager
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -70,6 +75,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -104,6 +111,7 @@ class MainActivity : ComponentActivity() {
                     applyWindow()
                 }
         }
+        lifecycleScope.launch { snapshotFlow { settings.cameraMotion }.collect { applyMotion() } }
 
         setContent {
             CompositionLocalProvider(LocalSettings provides settings, LocalHa provides ha) {
@@ -115,6 +123,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        motion?.stop()
         ha?.stop()
         super.onDestroy()
     }
@@ -128,10 +137,38 @@ class MainActivity : ComponentActivity() {
     /** True while the followed entity is on: keeps the screen awake like [Settings.keepScreenOn]. */
     private var followOn = false
 
-    /** Turns the screen on, which also ends a system screensaver. */
+    private var motion: CameraMotion? = null
+    private var motionOff: Job? = null
+
+    /** Camera watching runs for the activity's whole life, so it keeps working under a system screensaver. */
+    private fun applyMotion() {
+        motion?.stop()
+        motion = null
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (settings.cameraMotion && granted) motion = CameraMotion({ settings.motionSensitivity / 100f }, ::onMotion).takeIf { it.start() }
+    }
+
+    /** Wake, then report binary_sensor.kiosk_<device>_motion to HA: on now, off after a quiet minute. */
+    private fun onMotion() {
+        wakeScreen()
+        lastMotion.value = SystemClock.elapsedRealtime()
+        if (motionOff?.isActive != true) reportMotion(true)
+        motionOff?.cancel()
+        motionOff = lifecycleScope.launch { delay(60_000); reportMotion(false) }
+    }
+
+    private fun reportMotion(on: Boolean) {
+        val body = JSONObject().put("state", if (on) "on" else "off").put(
+            "attributes", JSONObject().put("device_class", "motion").put("friendly_name", "${Build.MODEL} camera motion"),
+        )
+        // Needs an admin token; without one the tablet still wakes, HA just doesn't hear about it.
+        lifecycleScope.launch { runCatching { ha?.postJson("/api/states/binary_sensor.kiosk_${Build.DEVICE.lowercase()}_motion", body) } }
+    }
+
+    /** Turns the screen on, which also ends a system screensaver, and restarts the screen timeout. */
     @Suppress("DEPRECATION") // no non-deprecated way to wake the screen from an app
     private fun wakeScreen() = (getSystemService(POWER_SERVICE) as PowerManager)
-        .newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "kiosk:follow").acquire(3_000)
+        .newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE, "kiosk:follow").acquire(3_000)
 
     /** True while the screensaver is showing: it dims the screen to its own brightness. */
     var saverActive = false
@@ -232,6 +269,10 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
             if (!saver && shouldStartSaver(System.currentTimeMillis() - lastTouch[0], settings.screensaverMinutes, busy)) saver = true
         }
     }
+    // Camera motion wakes the in-app screensaver too (the activity already woke the screen).
+    val motionAt by lastMotion.collectAsStateWithLifecycle()
+    LaunchedEffect(motionAt) { if (motionAt > 0) { saver = false; lastTouch[0] = System.currentTimeMillis() } }
+
     // Screen follows the chosen entity: wakes when it turns on, sleeps when it turns off.
     val follow = states[settings.wakeEntity]
     LaunchedEffect(follow?.state) {

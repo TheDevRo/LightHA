@@ -22,6 +22,10 @@ class Settings(private val prefs: SharedPreferences) {
     var screensaverBrightness by float("screensaver_brightness", 0.02f)
     /** An HA entity the screen follows: wakes when it turns on, sleeps when it turns off. */
     var wakeEntity by string("wake_entity", "")
+    /** Wake on motion seen by the tablet's own camera. */
+    var cameraMotion by bool("camera_motion", false)
+    /** Percent of the picture that must change to count as motion: 15 low, 6 medium, 2 high sensitivity. */
+    var motionSensitivity by int("motion_sensitivity", 6)
     /** Empty = no PIN. */
     var pin by string("pin", "")
     private var hidden by string("hidden_views", "")
