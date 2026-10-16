@@ -1,9 +1,12 @@
 package home.kiosk
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.util.Log
 import android.Manifest
 import android.content.pm.PackageManager
-import android.os.Build
 import androidx.core.content.ContextCompat
 import android.os.Bundle
 import android.os.SystemClock
@@ -78,6 +81,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -113,6 +117,15 @@ class MainActivity : ComponentActivity() {
         }
         lifecycleScope.launch { snapshotFlow { settings.cameraMotion }.collect { applyMotion() } }
 
+        // Sensors go to HA when switched on; everything known so far is resent after each (re)connect.
+        mobile = MobileApp(ha, settings)
+        lifecycleScope.launch {
+            combine(ha.status, snapshotFlow { settings.reportSensors }) { s, on -> s == Status.CONNECTED && on }
+                .distinctUntilChanged()
+                .collect { if (it) send(sensors.values.toList()) }
+        }
+        registerReceiver(battery, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+
         setContent {
             CompositionLocalProvider(LocalSettings provides settings, LocalHa provides ha) {
                 MaterialTheme(colorScheme = darkColorScheme(primary = Amber, onPrimary = CardBg, background = Bg, surface = Bg)) {
@@ -123,6 +136,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        unregisterReceiver(battery)
         motion?.stop()
         ha?.stop()
         super.onDestroy()
@@ -145,6 +159,7 @@ class MainActivity : ComponentActivity() {
         motion?.stop()
         motion = null
         val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (settings.cameraMotion) reportMotion(false)
         if (settings.cameraMotion && granted) motion = CameraMotion({ settings.motionSensitivity / 100f }, ::onMotion).takeIf { it.start() }
     }
 
@@ -157,12 +172,29 @@ class MainActivity : ComponentActivity() {
         motionOff = lifecycleScope.launch { delay(60_000); reportMotion(false) }
     }
 
-    private fun reportMotion(on: Boolean) {
-        val body = JSONObject().put("state", if (on) "on" else "off").put(
-            "attributes", JSONObject().put("device_class", "motion").put("friendly_name", "${Build.MODEL} camera motion"),
-        )
-        // Needs an admin token; without one the tablet still wakes, HA just doesn't hear about it.
-        lifecycleScope.launch { runCatching { ha?.postJson("/api/states/binary_sensor.kiosk_${Build.DEVICE.lowercase()}_motion", body) } }
+    private fun reportMotion(on: Boolean) = report(Sensor("camera_motion", "Camera motion", on, "motion"))
+
+    private var mobile: MobileApp? = null
+    /** Latest value of every sensor, by id. */
+    private val sensors = mutableMapOf<String, Sensor>()
+
+    private fun report(vararg changed: Sensor) {
+        changed.forEach { sensors[it.id] = it }
+        if (settings.reportSensors && ha?.status?.value == Status.CONNECTED) send(changed.toList())
+    }
+
+    private fun send(list: List<Sensor>) {
+        val m = mobile ?: return
+        if (list.isNotEmpty()) lifecycleScope.launch { runCatching { m.report(list) }.onFailure { Log.w("MobileApp", "report failed: $it") } }
+    }
+
+    // Fires on every small change (voltage too); only level, charger and whole degrees go to HA.
+    private val battery = object : BroadcastReceiver() {
+        private var last: Battery? = null
+        override fun onReceive(context: Context, intent: Intent) {
+            val now = Battery.from(intent)
+            if (now != last) { last = now; report(*now.sensors().toTypedArray()) }
+        }
     }
 
     /** Turns the screen on, which also ends a system screensaver, and restarts the screen timeout. */

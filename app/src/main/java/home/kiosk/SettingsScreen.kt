@@ -209,10 +209,18 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                     Text("Sensitivity", color = Color.White, fontSize = 15.sp)
                     Choices(listOf(15 to "Low", 6 to "Medium", 2 to "High"), settings.motionSensitivity) { settings.motionSensitivity = it }
                     Text(
-                        "Compares tiny grayscale snapshots once a second. Nothing is saved or sent. Also reports binary_sensor.kiosk_${Build.DEVICE.lowercase()}_motion to Home Assistant (admin token only).",
+                        "Compares tiny grayscale snapshots once a second. Nothing is saved or sent. Reported to Home Assistant when Sensors is on below.",
                         color = TextDim, fontSize = 13.sp,
                     )
                 }
+            }
+
+            Group("Sensors") {
+                Toggle("Report this tablet to Home Assistant", settings.reportSensors) { settings.reportSensors = it }
+                Text(
+                    "Adds a ${Build.MODEL} device in Home Assistant with battery level, charger and battery temperature, plus camera motion when that's on. Works with any account.",
+                    color = TextDim, fontSize = 13.sp,
+                )
             }
 
             Group("Display") {

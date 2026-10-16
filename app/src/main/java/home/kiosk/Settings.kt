@@ -30,6 +30,10 @@ class Settings(private val prefs: SharedPreferences) {
     var cameraMotion by bool("camera_motion", false)
     /** Percent of the picture that must change to count as motion: 15 low, 6 medium, 2 high sensitivity. */
     var motionSensitivity by int("motion_sensitivity", 6)
+    /** Report battery and camera motion to HA as a mobile_app device. */
+    var reportSensors by bool("report_sensors", false)
+    /** The mobile_app webhook HA handed out when this tablet registered; empty = not registered yet. */
+    var mobileWebhook by string("mobile_webhook", "")
     /** Empty = no PIN. */
     var pin by string("pin", "")
     private var hidden by string("hidden_views", "")
