@@ -5,15 +5,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -47,6 +44,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,7 +56,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -77,20 +77,23 @@ fun isRemoteCard(card: JSONObject) = card.optString("type") == "custom:universal
 /** androidtv.adb_command's built-in shortcuts; anything else becomes `input keyevent KEYCODE_…`. */
 private val ADB_SHORTCUTS = setOf("UP", "DOWN", "LEFT", "RIGHT", "CENTER", "BACK", "HOME", "MENU", "POWER", "MUTE", "VOLUME_UP", "VOLUME_DOWN", "SEARCH", "SETTINGS", "SLEEP", "WAKEUP", "ENTER")
 
-/** Default button names universal-remote-card knows → each platform's raw key. */
+/**
+ * Default button names → each platform's raw key. Only names universal-remote-card itself defines for that platform
+ * (src/models/maps/<platform>/defaultKeys.ts): HA silently skips any other name in `rows`, so we must too.
+ */
 private val DEFAULT_KEYS: Map<String, Map<String, String>> = mapOf(
     "adb" to mapOf(
         "up" to "UP", "down" to "DOWN", "left" to "LEFT", "right" to "RIGHT", "center" to "CENTER",
         "back" to "BACK", "home" to "HOME", "menu" to "MENU", "power" to "POWER",
         "volume_up" to "VOLUME_UP", "volume_down" to "VOLUME_DOWN", "volume_mute" to "MUTE",
         "play_pause" to "MEDIA_PLAY_PAUSE", "rewind" to "MEDIA_REWIND", "fast_forward" to "MEDIA_FAST_FORWARD",
-        "previous" to "MEDIA_PREVIOUS", "next" to "MEDIA_NEXT", "search" to "SEARCH", "settings" to "SETTINGS",
+        "search" to "SEARCH", "settings" to "SETTINGS",
     ),
     "apple" to mapOf(
         "up" to "up", "down" to "down", "left" to "left", "right" to "right", "center" to "select",
-        "back" to "menu", "menu" to "menu", "home" to "home", "play_pause" to "play_pause",
+        "menu" to "menu", "top_menu" to "top_menu", "home" to "home", "play_pause" to "play_pause", "play" to "play", "pause" to "pause",
         "volume_up" to "volume_up", "volume_down" to "volume_down",
-        "rewind" to "skip_backward", "fast_forward" to "skip_forward", "previous" to "previous", "next" to "next",
+        "skip_backward" to "skip_backward", "skip_forward" to "skip_forward", "previous" to "previous", "next" to "next",
     ),
     "androidtv_remote" to mapOf(
         "up" to "DPAD_UP", "down" to "DPAD_DOWN", "left" to "DPAD_LEFT", "right" to "DPAD_RIGHT", "center" to "DPAD_CENTER",
@@ -167,7 +170,9 @@ fun RemoteCard(card: JSONObject, ctx: CardContext) {
                                 if (item.isNull(j)) Spacer(Modifier.size(56.dp)) else Element(card, item.optString(j), ctx) { typing = true }
                             }
                         }
-                        is String -> Element(card, item, ctx) { typing = true }
+                        // The touchpad takes whatever width the row's other items leave, like it does in HA.
+                        is String -> if (isTouchpad(card, item)) Box(Modifier.weight(1f).padding(end = 12.dp)) { Element(card, item, ctx) { typing = true } }
+                            else Element(card, item, ctx) { typing = true }
                         else -> Spacer(Modifier.size(24.dp))
                     }
                 }
@@ -181,7 +186,7 @@ fun RemoteCard(card: JSONObject, ctx: CardContext) {
 private fun Element(card: JSONObject, name: String, ctx: CardContext, onType: () -> Unit) {
     val custom = customAction(card, name)
     when {
-        custom?.optString("type") == "touchpad" || (custom == null && name == "touchpad") -> Touchpad(card, custom, ctx)
+        isTouchpad(card, name) -> Touchpad(card, custom, ctx)
         custom == null && name in setOf("keyboard", "textbox") -> RemoteButton(Icons.Rounded.Keyboard, null, onTap = onType)
         custom != null -> {
             val tap = remoteAct(card, custom.optJSONObject("tap_action"))
@@ -203,6 +208,16 @@ private fun Element(card: JSONObject, name: String, ctx: CardContext, onType: ()
 }
 
 private fun run(act: Act, ctx: CardContext) { ctx.runner(act, null)?.invoke() }
+
+private fun isTouchpad(card: JSONObject, name: String) =
+    customAction(card, name).let { it?.optString("type") == "touchpad" || (it == null && name == "touchpad") }
+
+/** Which way a swipe went, once it has travelled [step] px; null until then. */
+fun swipeDirection(dx: Float, dy: Float, step: Float): String? = when {
+    abs(dx) < step && abs(dy) < step -> null
+    abs(dx) > abs(dy) -> if (dx > 0) "right" else "left"
+    else -> if (dy > 0) "down" else "up"
+}
 
 /** Round button; [repeat] re-fires every 150 ms while held (universal-remote-card's `hold_action: repeat`). */
 @OptIn(ExperimentalFoundationApi::class)
@@ -232,31 +247,59 @@ private fun RemoteButton(
     }
 }
 
-/** Swipe pad: each ~60dp of travel sends one direction key; tap sends center. */
+/**
+ * Swipe pad, like universal-remote-card's: every ~28dp of travel sends that direction's key, holding still after a
+ * swipe repeats it (when the direction's hold_action is `repeat`, the card's default), and a tap sends center.
+ * An arrow flashes on each key so you can see it registered.
+ */
 @Composable
 private fun Touchpad(card: JSONObject, custom: JSONObject?, ctx: CardContext) {
     fun dirAct(dir: String) = custom?.optJSONObject(dir)?.optJSONObject("tap_action")?.let { remoteAct(card, it) } ?: defaultKeyService(card, dir) ?: Act.None
+    fun repeats(dir: String) = custom == null || custom.optJSONObject(dir)?.optJSONObject("hold_action")?.optString("action") == "repeat"
     val center = custom?.optJSONObject("tap_action")?.let { remoteAct(card, it) } ?: defaultKeyService(card, "center") ?: Act.None
-    val stepPx = with(LocalDensity.current) { 60.dp.toPx() }
+    val stepPx = with(LocalDensity.current) { 28.dp.toPx() }
+    val scope = rememberCoroutineScope()
+    var flash by remember { mutableStateOf<Pair<String, Long>?>(null) }
+    LaunchedEffect(flash) { if (flash != null) { delay(250); flash = null } }
+    fun press(dir: String) { run(dirAct(dir), ctx); flash = dir to System.nanoTime() }
+
     Box(
-        Modifier.widthIn(max = 260.dp).fillMaxWidth(0.62f).aspectRatio(1f).clip(RoundedCornerShape(28.dp)).background(Chip)
-            .pointerInput(card) { detectTapGestures(onTap = { run(center, ctx) }) }
+        Modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(28.dp)).background(Chip)
             .pointerInput(card) {
-                var dx = 0f
-                var dy = 0f
-                detectDragGestures(onDragStart = { dx = 0f; dy = 0f }) { change, drag ->
-                    change.consume()
-                    dx += drag.x; dy += drag.y
-                    if (abs(dx) >= stepPx || abs(dy) >= stepPx) {
-                        val dir = if (abs(dx) > abs(dy)) (if (dx > 0) "right" else "left") else (if (dy > 0) "down" else "up")
-                        run(dirAct(dir), ctx)
-                        dx = 0f; dy = 0f
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    var acc = Offset.Zero
+                    var moved = false
+                    var repeater: Job? = null
+                    while (true) {
+                        val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        val d = change.positionChange()
+                        if (d == Offset.Zero) continue
+                        change.consume()
+                        acc += d
+                        if (acc.getDistance() > viewConfiguration.touchSlop) moved = true
+                        val dir = swipeDirection(acc.x, acc.y, stepPx) ?: continue
+                        acc = Offset.Zero
+                        press(dir)
+                        repeater?.cancel()
+                        if (repeats(dir)) repeater = scope.launch { delay(400); while (true) { press(dir); delay(120) } }
                     }
+                    repeater?.cancel()
+                    if (!moved) { run(center, ctx); flash = "center" to System.nanoTime() }
                 }
             },
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.size(14.dp).clip(CircleShape).background(TextDim))
+        val arrow = when (flash?.first) {
+            "up" -> Icons.Rounded.KeyboardArrowUp
+            "down" -> Icons.Rounded.KeyboardArrowDown
+            "left" -> Icons.Rounded.KeyboardArrowLeft
+            "right" -> Icons.Rounded.KeyboardArrowRight
+            else -> null
+        }
+        if (arrow != null) Icon(arrow, null, tint = Color.White, modifier = Modifier.size(56.dp))
+        else Box(Modifier.size(if (flash != null) 22.dp else 14.dp).clip(CircleShape).background(if (flash != null) Color.White else TextDim))
     }
 }
 
@@ -282,8 +325,8 @@ private fun iconFor(mdi: String, name: String): ImageVector? = when (mdi.removeP
     "volume_up", "volume-plus", "volume-high" -> Icons.AutoMirrored.Rounded.VolumeUp
     "volume_down", "volume-minus", "volume-medium" -> Icons.AutoMirrored.Rounded.VolumeDown
     "volume_mute", "volume-mute", "volume-off" -> Icons.AutoMirrored.Rounded.VolumeOff
-    "rewind" -> Icons.Rounded.FastRewind
-    "fast_forward", "fast-forward" -> Icons.Rounded.FastForward
+    "rewind", "skip_backward", "rewind-10" -> Icons.Rounded.FastRewind
+    "fast_forward", "fast-forward", "skip_forward", "fast-forward-10" -> Icons.Rounded.FastForward
     "play_pause", "play-pause", "play" -> Icons.Rounded.PlayArrow
     "stop" -> Icons.Rounded.Stop
     "previous", "skip-previous" -> Icons.Rounded.SkipPrevious
