@@ -113,6 +113,7 @@ private fun CardBody(card: JSONObject, ctx: CardContext, top: Boolean) {
             }
         }
         type == "clock" -> Clock()
+        isCameraCard(card) -> CameraCard(card, ctx)
         isMediaCard(card) -> MediaCard(card, ctx)
         isRemoteCard(card) -> RemoteCard(card, ctx)
         isPopup(card) -> if (ctx.editing) Placeholder("Pop-up · ${popupTitle(card)}", top)
