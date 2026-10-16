@@ -71,24 +71,35 @@ class WakeWordListener(private val context: Context, private val onMicBroken: ()
     @Volatile private var running = false
     private var thread: Thread? = null
 
+    private var config: Pair<String, Int>? = null
+
+    /** No-op while already listening with the same settings, so it's safe to call often (see [MainActivity]). */
     fun start(id: String, sensitivity: Int) {
+        if (thread?.isAlive == true && config == (id to sensitivity)) return
         stop()
+        config = id to sensitivity
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (id.isEmpty() || !granted) return
         running = true
         wakeError.value = null
-        thread = Thread({ listen(id, sensitivity) }, "wake-word").apply { start() }
+        thread = Thread({
+            // A busy or flaky mic (still held for a moment after an Assist turn) is retried, not given up on.
+            while (running && listen(id, sensitivity) == Outcome.RETRY) runCatching { Thread.sleep(2_000) }
+        }, "wake-word").apply { start() }
     }
 
     /** Returns once the mic is released. */
     fun stop() {
         running = false
+        config = null
         thread?.join(1_000)
         thread = null
     }
 
+    private enum class Outcome { DONE, RETRY }
+
     @SuppressLint("MissingPermission") // checked in start()
-    private fun listen(id: String, sensitivity: Int) {
+    private fun listen(id: String, sensitivity: Int): Outcome {
         var mic: AudioRecord? = null
         try {
             val model = WakeModel.parse(id, context.assets.open("wakeword/$id.json").bufferedReader().use { it.readText() })
@@ -98,15 +109,17 @@ class WakeWordListener(private val context: Context, private val onMicBroken: ()
                 val size = maxOf(AudioRecord.getMinBufferSize(16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT), 3200)
                 mic = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size)
                 val m = mic!!
-                if (m.state != AudioRecord.STATE_INITIALIZED) { wakeError.value = "Microphone unavailable."; return }
+                if (m.state != AudioRecord.STATE_INITIALIZED) { wakeError.value = "Microphone unavailable, retrying."; return Outcome.RETRY }
                 m.startRecording()
+                if (m.recordingState != AudioRecord.RECORDSTATE_RECORDING) { wakeError.value = "Microphone busy, retrying."; return Outcome.RETRY }
+                wakeError.value = null
                 wakeListening.value = true
                 val chunk = ShortArray(160) // 10 ms
                 while (running) {
                     val n = m.read(chunk, 0, chunk.size)
                     // Some ROMs (LineageOS 14.1 on the Fire HD6) crash Android's audio service on any capture. Don't retry:
                     // every new AudioRecord crashes it again.
-                    if (n < 0) { Log.w(TAG, "mic read error $n"); Handler(Looper.getMainLooper()).post(onMicBroken); return }
+                    if (n < 0) { Log.w(TAG, "mic read error $n"); Handler(Looper.getMainLooper()).post(onMicBroken); return Outcome.DONE }
                     if (n > 0 && engine.process(if (n == chunk.size) chunk else chunk.copyOf(n))) {
                         Log.i(TAG, "heard $id")
                         running = false
@@ -115,9 +128,15 @@ class WakeWordListener(private val context: Context, private val onMicBroken: ()
                     }
                 }
             }
-        } catch (e: Exception) {
+            return Outcome.DONE
+        } catch (e: UnsatisfiedLinkError) { // a broken native lib must not take the app down, and won't fix itself
             Log.w(TAG, "wake word stopped: $e")
-            wakeError.value = "Wake word stopped: ${e.message}"
+            wakeError.value = "Wake word engine failed to load."
+            return Outcome.DONE
+        } catch (e: Exception) {
+            Log.w(TAG, "wake word error, retrying: $e")
+            wakeError.value = "Wake word error, retrying: ${e.message}"
+            return Outcome.RETRY
         } finally {
             mic?.release()
             wakeListening.value = false

@@ -24,7 +24,12 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
   - **Start after reboot:** for when you don't use home-screen mode.
   - **Screensaver:** after a set idle time, a black screen with a dim clock that moves every minute to avoid burn-in, at its own low brightness. Any tap wakes it.
   - **Screen follows an entity:** pick any HA entity (motion, a room's lights, someone home). The screen wakes when it turns on and sleeps when it turns off, including under Android's own screensaver (for example ImmichFrame).
-  - **Wake on camera motion:** the tablet's camera compares tiny grayscale snapshots once a second (nothing is saved or sent). Motion wakes the screen and reports `binary_sensor.kiosk_<device>_motion` to HA (admin accounts only).
+  - **Wake on camera motion:** the tablet's camera compares tiny grayscale snapshots once a second (nothing is saved or sent). Motion wakes the screen, and with **Sensors** on it's reported to HA as a camera motion sensor.
+- **Sensors** (Settings → Sensors): the tablet registers as a device through HA's `mobile_app` integration, like the Companion app, and reports battery level, charger plugged in, battery temperature and camera motion. Works with any account.
+- **Voice** (Settings → Voice):
+  - **Assist button:** tap the mic in the header and talk. HA's Assist pipeline (pick one, or use your default) hears when you stop, the answer shows on screen, and the reply is spoken.
+  - **Wake word:** Okay Nabu, Hey Jarvis or Hey Mycroft, detected on the tablet with [microWakeWord](https://github.com/OHF-Voice/micro-wake-word) (the engine from the HA Companion app). No audio leaves the tablet until the word is heard. The header mic turns amber while it's listening. Sensitivity is adjustable.
+  - Some old ROMs crash Android's audio service whenever the mic records (LineageOS 14.1 on the Fire HD 6 does). LightHA notices, switches the mic off, and says so in Settings.
 - **Kiosk basics.** The screen stays on, the app runs fullscreen, and it reconnects with backoff when HA drops.
 
 ## Install
@@ -51,7 +56,7 @@ release.store=/path/to/lightha-release.jks
 release.password=<keystore password>
 ```
 
-Then run `./gradlew installDebug`, or `./gradlew assembleRelease` for a shrunk, signed APK. Needs JDK 17+ and Android SDK platform 34.
+Then run `./gradlew installDebug`, or `./gradlew assembleRelease` for a shrunk, signed APK. Needs JDK 17+, Android SDK platform 34, NDK 29.0.14206865 and CMake 4.1.2 (`sdkmanager "ndk;29.0.14206865" "cmake;4.1.2"`). The first build downloads tflite-micro and its dependencies (pinned by hash).
 
 The app opens the dashboard with the URL path `wall-home`. To pick another one, tap the pencil and choose from the list. To edit a dashboard on the tablet, it must be a "wall" copy; the **Make a wall copy to edit here** button makes one. This keeps tablet edits from changing your main dashboards.
 
@@ -94,5 +99,8 @@ Map card (needs internet map tiles) · live camera video · `card_mod` on cards 
 | `Kiosk.kt` | home-screen mode, start on boot, screensaver |
 | `Remote.kt` | universal-remote-card and per-platform key dispatch |
 | `Settings.kt`, `SettingsScreen.kt` | on-tablet settings |
+| `MobileApp.kt` | `mobile_app` registration and sensor reports (battery, charger, camera motion) |
+| `Voice.kt` | push-to-talk Assist over the WebSocket, reply overlay and playback |
+| `WakeWord.kt`, `cpp/` | on-tablet wake word: JNI wrapper and the native microWakeWord engine (Apache-2.0, see `cpp/NOTICE`) |
 
 The pure logic is covered by JVM unit tests: `./gradlew testDebugUnitTest`.

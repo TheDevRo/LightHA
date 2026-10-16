@@ -113,6 +113,14 @@ class MainActivity : ComponentActivity() {
                 .distinctUntilChanged()
                 .collect { w -> if (w == null) wake?.stop() else wake?.start(w.first, w.second) }
         }
+        // Watchdog: if the listener ever ends while no turn is running (a missed state change, an odd failure),
+        // bring it back within a few seconds. start() is a no-op while it's healthy.
+        lifecycleScope.launch {
+            while (true) {
+                delay(5_000)
+                if (voice.state.value == null && settings.wakeWord.isNotEmpty() && !settings.micBroken) wake?.start(settings.wakeWord, settings.wakeSensitivity)
+            }
+        }
         ha.start()
 
         // Follow the chosen entity even while Android's own screensaver (e.g. ImmichFrame) covers the app,
