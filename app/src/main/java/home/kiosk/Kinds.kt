@@ -123,7 +123,7 @@ fun activePlayer(ids: List<String>, states: Map<String, Entity>): String? =
 /** 222 -> "3:42". */
 fun clockText(seconds: Double): String = "%d:%02d".format(Locale.US, seconds.toInt() / 60, seconds.toInt() % 60)
 
-private fun weatherText(state: String) = when (state) {
+fun weatherText(state: String) = when (state) {
     "partlycloudy" -> "Partly cloudy"
     "clear-night" -> "Clear"
     "lightning-rainy" -> "Thunderstorms"
