@@ -25,11 +25,25 @@ class RemoteTest {
     }
 
     @Test fun appleTvUsesRemoteSendCommand() {
-        val back = defaultKeyService(apple, "back")!!
-        assertEquals("remote" to "send_command", back.domain to back.service)
-        assertEquals("menu", cmd(back))
+        val menu = defaultKeyService(apple, "menu")!!
+        assertEquals("remote" to "send_command", menu.domain to menu.service)
+        assertEquals("menu", cmd(menu))
+        assertEquals("skip_backward", cmd(defaultKeyService(apple, "skip_backward")))
         assertEquals("select", cmd(defaultKeyService(apple, "center")))
         assertNull(defaultKeyService(apple, "power")) // no such key; the card uses a custom ApplePower button
+    }
+
+    @Test fun onlyNamesTheHaCardDrawsForThatPlatform() {
+        // universal-remote-card skips these, so a stray "rewind" row on an Apple TV remote shows nothing in HA.
+        listOf("rewind", "fast_forward", "back").forEach { assertNull(it, defaultKeyService(apple, it)) }
+        listOf("previous", "next").forEach { assertNull(it, defaultKeyService(fire, it)) }
+    }
+
+    @Test fun swipeNeedsAStepAndPicksTheBiggerAxis() {
+        assertNull(swipeDirection(20f, -10f, 28f))
+        assertEquals("right", swipeDirection(30f, 10f, 28f))
+        assertEquals("up", swipeDirection(5f, -29f, 28f))
+        assertEquals("left", swipeDirection(-40f, 39f, 28f))
     }
 
     @Test fun customActionsAndText() {
