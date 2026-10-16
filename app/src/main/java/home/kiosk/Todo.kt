@@ -1,5 +1,6 @@
 package home.kiosk
 
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -105,15 +106,25 @@ fun MarkdownCard(card: JSONObject, ctx: CardContext) {
     // Templates in markdown are rendered by HA (e.g. {{ now().strftime('%I:%M %p') }}); HA re-renders them as things change.
     val content = rememberTemplate(card.optString("content")) ?: return
     if ("{{" in content || "{%" in content) return // waiting for HA's first render
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(CardBg).padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    val mod = remember(card) { cardMod(card) }
+    val scale = mod.fontScale ?: 1f
+    val fg = mod.color?.let { Color(it) } ?: Color.White
+    val align = when (mod.align) { "center" -> TextAlign.Center; "right" -> TextAlign.End; else -> null }
+    val weight = { normal: FontWeight -> when (mod.bold) { true -> FontWeight.Bold; false -> FontWeight.Normal; null -> normal } }
+    @Composable fun line(text: AnnotatedString, size: Int, normal: FontWeight) =
+        Text(text, Modifier.fillMaxWidth(), color = fg, fontSize = (size * scale).sp, lineHeight = (size * scale * 1.2f).sp, fontWeight = weight(normal), textAlign = align)
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(mod.radiusPx?.dp ?: 24.dp)).background(mod.background?.let { Color(it) } ?: CardBg).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         card.optString("title").takeIf { it.isNotEmpty() }?.let { Text(it, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold) }
         markdownBlocks(content).forEach { (kind, text) ->
             when (kind) {
-                1 -> Text(inline(text), color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
-                2 -> Text(inline(text), color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
-                3 -> Text(inline(text), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Medium)
-                BULLET -> Row { Text("•  ", color = Amber, fontSize = 16.sp); Text(inline(text), color = Color.White, fontSize = 16.sp) }
-                else -> Text(inline(text), color = Color.White, fontSize = 16.sp)
+                1 -> line(inline(text), 26, FontWeight.SemiBold)
+                2 -> line(inline(text), 21, FontWeight.SemiBold)
+                3 -> line(inline(text), 18, FontWeight.Medium)
+                BULLET -> Row { Text("•  ", color = Amber, fontSize = (16 * scale).sp); line(inline(text), 16, FontWeight.Normal) }
+                else -> line(inline(text), 16, FontWeight.Normal)
             }
         }
     }
