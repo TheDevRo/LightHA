@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 data class Entity(val id: String, val state: String, val attributes: JSONObject, val lastChanged: String = "") {
     val domain get() = id.substringBefore('.')
-    val name get() = attributes.optString("friendly_name", id)
+    val name get() = attributes.text("friendly_name", id)
 }
 
 enum class Status { NOT_CONFIGURED, CONNECTING, CONNECTED, AUTH_FAILED }

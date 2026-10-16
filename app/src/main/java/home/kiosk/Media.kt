@@ -91,9 +91,9 @@ fun MediaCard(card: JSONObject, ctx: CardContext) {
                 Art(e)
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x33000000), Color(0xEE17191E)))))
                 Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
-                    Text(e.attributes.optString("media_title").ifEmpty { e.name }, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(e.attributes.text("media_title").ifEmpty { e.name }, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        listOf(e.attributes.optString("media_artist"), cardTitle(card, e)).filter { it.isNotEmpty() }.joinToString(" · "),
+                        listOf(e.attributes.text("media_artist"), cardTitle(card, e)).filter { it.isNotEmpty() }.joinToString(" · "),
                         color = Color(0xFFCCCCCC), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -125,7 +125,7 @@ private fun cardTitle(card: JSONObject, e: Entity) = card.optString("name").ifEm
 
 @Composable
 private fun Art(e: Entity) {
-    val img = rememberImage(e.attributes.optString("entity_picture").takeIf { it.isNotEmpty() })
+    val img = rememberImage(e.attributes.text("entity_picture").takeIf { it.isNotEmpty() })
     if (img != null) Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
     else Box(Modifier.fillMaxSize().background(Chip))
 }
