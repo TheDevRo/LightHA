@@ -89,6 +89,14 @@ fun viewsOf(config: JSONObject): List<JSONObject> = config.optJSONArray("views")
 /** Stable id for a view: its URL path, else its position. Used for show/hide and "last view". */
 fun viewKey(view: JSONObject, index: Int) = view.optString("path").ifEmpty { index.toString() }
 
+/** A view's `background`: image URL (string or {media_content_id}) and opacity 0..1 (HA stores percent). */
+fun viewBackground(view: JSONObject?): Pair<String, Float>? {
+    val bg = view?.optJSONObject("background") ?: return null
+    val url = bg.optJSONObject("image")?.optString("media_content_id") ?: bg.optString("image")
+    if (url.isNullOrEmpty() || url == "null") return null
+    return url to (bg.optDouble("opacity", 100.0) / 100.0).coerceIn(0.0, 1.0).toFloat()
+}
+
 fun viewTitle(view: JSONObject, index: Int) = view.optString("title").ifEmpty { view.optString("path").ifEmpty { "View ${index + 1}" } }
 
 /** Which view a `navigate` path points at: "/wall-home/living-room", "living-room" or "1". */
