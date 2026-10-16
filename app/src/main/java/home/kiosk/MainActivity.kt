@@ -95,7 +95,7 @@ class MainActivity : ComponentActivity() {
         settings = Settings(prefs)
         applyWindow()
 
-        val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope).also { this.ha = it }
+        val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope, settings.haRefresh).also { this.ha = it }
         val lovelace = Lovelace(ha, lifecycleScope, prefs)
         ha.start()
 

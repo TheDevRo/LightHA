@@ -32,8 +32,12 @@ data class Entity(val id: String, val state: String, val attributes: JSONObject,
 
 enum class Status { NOT_CONFIGURED, CONNECTING, CONNECTED, AUTH_FAILED }
 
-/** Home Assistant WebSocket API client: auth, live entity states, service calls, request/response, lovelace_updated. */
-class HaClient(private val baseUrl: String, private val token: String, private val scope: CoroutineScope) {
+/**
+ * Home Assistant WebSocket API client: auth, live entity states, service calls, request/response, lovelace_updated.
+ * Authenticates with a long-lived [token], or, when signed in with an account, a [refreshToken] that's traded for
+ * 30-minute access tokens as they run out.
+ */
+class HaClient(private val baseUrl: String, @Volatile private var token: String, private val scope: CoroutineScope, private val refreshToken: String = "") {
     private val wsUrl = baseUrl.trimEnd('/').replaceFirst("http", "ws") + "/api/websocket"
     private val http = OkHttpClient.Builder().pingInterval(30, TimeUnit.SECONDS).build()
     private val nextId = AtomicInteger(1)
@@ -42,6 +46,8 @@ class HaClient(private val baseUrl: String, private val token: String, private v
     @Volatile private var getStatesId = -1
     @Volatile private var stopped = false
     private var backoffMs = 1_000L
+    @Volatile private var tokenExpiresAt = 0L
+    @Volatile private var authRetried = false
 
     private val _states = MutableStateFlow<Map<String, Entity>>(emptyMap())
     val states: StateFlow<Map<String, Entity>> = _states
@@ -54,11 +60,30 @@ class HaClient(private val baseUrl: String, private val token: String, private v
     fun start() {
         if (stopped) return
         val request = runCatching { Request.Builder().url(wsUrl).build() }.getOrNull()
-        if (baseUrl.isBlank() || token.isBlank() || request == null) {
+        if (baseUrl.isBlank() || (token.isBlank() && refreshToken.isBlank()) || request == null) {
             _status.value = Status.NOT_CONFIGURED // blank or malformed URL: Settings asks for it
             return
         }
-        ws = http.newWebSocket(request, listener)
+        if (refreshToken.isEmpty()) { ws = http.newWebSocket(request, listener); return }
+        scope.launch {
+            try {
+                ensureToken()
+                ws = http.newWebSocket(request, listener)
+            } catch (e: HaAuth.Revoked) {
+                _status.value = Status.AUTH_FAILED
+            } catch (e: Exception) {
+                Log.w(TAG, "token refresh failed: $e")
+                reconnect()
+            }
+        }
+    }
+
+    /** Signed in with an account: renew the access token a minute before it runs out. No-op for long-lived tokens. */
+    private suspend fun ensureToken() {
+        if (refreshToken.isEmpty() || System.currentTimeMillis() < tokenExpiresAt - 60_000) return
+        val t = HaAuth.refresh(baseUrl, refreshToken)
+        token = t.access
+        tokenExpiresAt = System.currentTimeMillis() + t.expiresInSec * 1000
     }
 
     /** For good: used when the activity goes away or the URL/token changes. */
@@ -117,6 +142,7 @@ class HaClient(private val baseUrl: String, private val token: String, private v
 
     /** Authenticated REST GET against HA (calendars and other endpoints the WebSocket API lacks). */
     suspend fun getJson(path: String): Any = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        ensureToken()
         val req = Request.Builder().url(baseUrl.trimEnd('/') + path).header("Authorization", "Bearer $token").build()
         http.newCall(req).execute().use { r ->
             if (!r.isSuccessful) throw IOException("GET $path: HTTP ${r.code}")
@@ -127,6 +153,7 @@ class HaClient(private val baseUrl: String, private val token: String, private v
 
     /** Authenticated REST POST (e.g. /api/states to publish the tablet's own sensors). */
     suspend fun postJson(path: String, body: JSONObject) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        ensureToken()
         val req = Request.Builder().url(baseUrl.trimEnd('/') + path).header("Authorization", "Bearer $token")
             .post(body.toString().toRequestBody("application/json".toMediaType())).build()
         http.newCall(req).execute().use { r -> if (!r.isSuccessful) throw IOException("POST $path: HTTP ${r.code}") }
@@ -147,6 +174,7 @@ class HaClient(private val baseUrl: String, private val token: String, private v
                 "auth_required" -> webSocket.send(JSONObject().put("type", "auth").put("access_token", token).toString())
                 "auth_ok" -> {
                     backoffMs = 1_000L
+                    authRetried = false
                     // ponytail: subscribe-then-snapshot leaves a tiny window where an event older than the
                     // snapshot is overwritten; switch to subscribe_entities if that ever shows up.
                     send("subscribe_events") { put("event_type", "state_changed") }
@@ -157,6 +185,12 @@ class HaClient(private val baseUrl: String, private val token: String, private v
                 }
                 "auth_invalid" -> {
                     Log.e(TAG, "auth_invalid: ${msg.optString("message")}")
+                    if (refreshToken.isNotEmpty() && !authRetried) {
+                        authRetried = true
+                        tokenExpiresAt = 0 // access token went stale (e.g. tablet clock jumped): renew once and retry
+                        webSocket.close(1000, null)
+                        return
+                    }
                     _status.value = Status.AUTH_FAILED
                     webSocket.close(1000, null) // bad token won't fix itself; no reconnect
                 }
