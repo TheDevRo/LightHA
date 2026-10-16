@@ -14,6 +14,7 @@ val local = Properties().apply {
 android {
     namespace = "home.kiosk"
     compileSdk = 34
+    ndkVersion = "29.0.14206865" // wake word engine (src/main/cpp)
 
     defaultConfig {
         applicationId = "home.kiosk"
@@ -24,6 +25,11 @@ android {
         // Release builds ship with no server or token: first launch opens Settings.
         buildConfigField("String", "HA_URL", "\"\"")
         buildConfigField("String", "HA_TOKEN", "\"\"")
+        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") } // the tablets; skips x86 emulator builds
+    }
+
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "4.1.2" }
     }
 
     signingConfigs {
