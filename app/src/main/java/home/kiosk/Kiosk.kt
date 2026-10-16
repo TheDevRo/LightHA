@@ -96,3 +96,14 @@ fun Screensaver(onWake: () -> Unit) {
 /** True when the dashboard has sat untouched long enough to start the screensaver. */
 fun shouldStartSaver(idleMs: Long, minutes: Int, busy: Boolean) = minutes > 0 && !busy && idleMs >= minutes * 60_000L
 
+
+/**
+ * Screen follows an HA entity (motion, a room's lights, presence, a switch...): true = wake, false = sleep, null = leave it.
+ * Sleep waits for a minute without touches, so a motion sensor clearing doesn't blank the screen mid-tap.
+ */
+fun followAction(e: Entity?, idleMs: Long, busy: Boolean): Boolean? = when {
+    e == null || e.unavailable -> null
+    isActive(e) || e.state == "home" || e.state == "detected" -> true
+    busy || idleMs < 60_000L -> null
+    else -> false
+}

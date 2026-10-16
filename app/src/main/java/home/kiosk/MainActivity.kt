@@ -208,10 +208,15 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
             if (!saver && shouldStartSaver(System.currentTimeMillis() - lastTouch[0], settings.screensaverMinutes, busy)) saver = true
         }
     }
-    // Wake when the chosen motion/presence entity turns on.
-    val wakeState = states[settings.wakeEntity]?.state
-    LaunchedEffect(wakeState) {
-        if (wakeState == "on" || wakeState == "home" || wakeState == "detected") { saver = false; lastTouch[0] = System.currentTimeMillis() }
+    // Screen follows the chosen entity: wakes when it turns on, sleeps when it turns off.
+    val follow = states[settings.wakeEntity]
+    LaunchedEffect(follow?.state) {
+        val busy = draft != null || popup != null || moreInfo != null || sheet || showSettings
+        when (followAction(follow, System.currentTimeMillis() - lastTouch[0], busy)) {
+            true -> { saver = false; lastTouch[0] = System.currentTimeMillis() }
+            false -> saver = true
+            null -> {}
+        }
     }
 
     fun guarded(action: () -> Unit) { if (settings.pin.isEmpty()) action() else pinFor = action }

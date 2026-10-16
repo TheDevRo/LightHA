@@ -146,20 +146,21 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                         settings.screensaverBrightness, { settings.screensaverBrightness = it }, valueRange = 0.01f..0.5f,
                         colors = SliderDefaults.colors(thumbColor = Amber, activeTrackColor = Amber, inactiveTrackColor = Chip),
                     )
-                    var picking by remember { mutableStateOf(false) }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Wake on motion or presence", color = Color.White, fontSize = 15.sp)
-                            Text(states[settings.wakeEntity]?.name ?: "Off", color = TextDim, fontSize = 13.sp)
-                        }
-                        if (settings.wakeEntity.isNotEmpty()) TextButton(onClick = { settings.wakeEntity = "" }) { Text("CLEAR") }
-                        OutlinedButton(onClick = { picking = true }) { Text("Choose") }
-                    }
-                    if (picking) EntityPicker(
-                        states.filterKeys { it.startsWith("binary_sensor.") || it.startsWith("input_boolean.") || it.startsWith("person.") },
-                        onPick = { settings.wakeEntity = it; picking = false }, onDismiss = { picking = false },
-                    )
                 }
+                var picking by remember { mutableStateOf(false) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Screen follows an entity", color = Color.White, fontSize = 15.sp)
+                        Text(states[settings.wakeEntity]?.name ?: "Off", color = TextDim, fontSize = 13.sp)
+                    }
+                    if (settings.wakeEntity.isNotEmpty()) TextButton(onClick = { settings.wakeEntity = "" }) { Text("CLEAR") }
+                    OutlinedButton(onClick = { picking = true }) { Text("Choose") }
+                }
+                if (picking) EntityPicker(
+                    states,
+                    onPick = { settings.wakeEntity = it; picking = false }, onDismiss = { picking = false },
+                )
+                Text("Wakes when it turns on (motion, a room's lights, someone home) and sleeps when it turns off, unless the screen was touched in the last minute.", color = TextDim, fontSize = 13.sp)
             }
 
             Group("Display") {
