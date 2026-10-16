@@ -17,20 +17,23 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
 - **Live reload.** The app listens for HA's `lovelace_updated` event, so a save from anywhere updates the tablet.
 - **Multiple views.** Each view gets a tab, and you can swipe between them. Subviews and `navigate` actions work, the app reopens on the last view, and it can return to the first view after a set idle time.
 - **Universal remote card**, drawn natively. It honours your `rows` and `custom_actions`, supports hold-to-repeat, has a swipe touchpad and text entry, and sends keys the right way per platform: Fire TV through `androidtv.adb_command`, Apple TV and Android TV through `remote.send_command`.
-- **On-tablet settings** (gear icon): HA address and token, dashboard, which views show (all are on by default), return-to-first-view timer, keep screen on, fullscreen, brightness, tablet editing on/off, and an optional PIN for settings and editing.
+- **On-tablet settings** (gear icon): HA address and sign-in (account or long-lived token), dashboard, which views show (all are on by default), return-to-first-view timer, keep screen on, fullscreen, brightness, tablet editing on/off, and an optional PIN for settings and editing.
 - **View backgrounds:** each view's HA background image, at its opacity.
 - **Kiosk mode** (Settings → Kiosk):
   - **Use as home screen:** the Home button and reboots open the dashboard.
   - **Start after reboot:** for when you don't use home-screen mode.
   - **Screensaver:** after a set idle time, a black screen with a dim clock that moves every minute to avoid burn-in, at its own low brightness. Any tap wakes it.
-  - **Wake on motion or presence:** pick an HA entity; when it turns on, the screensaver wakes.
+  - **Screen follows an entity:** pick any HA entity (motion, a room's lights, someone home). The screen wakes when it turns on and sleeps when it turns off, including under Android's own screensaver (for example ImmichFrame).
+  - **Wake on camera motion:** the tablet's camera compares tiny grayscale snapshots once a second (nothing is saved or sent). Motion wakes the screen and reports `binary_sensor.kiosk_<device>_motion` to HA (admin accounts only).
 - **Kiosk basics.** The screen stays on, the app runs fullscreen, and it reconnects with backoff when HA drops.
 
 ## Install
 
 1. Download `LightHA-<version>.apk` from [Releases](https://github.com/TheDevRo/LightHA/releases) and install it on the tablet. Android 5.0 or newer.
-2. In HA, create a long-lived access token: **Profile → Security → Long-lived access tokens**.
-3. Open LightHA. On first launch it shows Settings: enter your HA address (for example `http://homeassistant.local:8123`) and the token, then tap **Save & reconnect**.
+2. Open LightHA. On first launch it shows Settings: enter your HA address (for example `http://homeassistant.local:8123`), then sign in with your HA username and password (and 2-factor code, if you use one). The tablet keeps only a refresh token; remove it any time under **Profile → Security** in HA.
+3. Prefer a long-lived token? Pick **Long-lived token** instead and paste one from **Profile → Security → Long-lived access tokens**.
+
+Non-admin accounts see only the dashboards and views HA shows them, and can't edit from the tablet.
 
 Release APKs contain no server address or token. Everything is entered on the tablet.
 
@@ -61,11 +64,11 @@ The app opens the dashboard with the URL path `wall-home`. To pick another one, 
 | Mushroom: light, entity, template, climate, number, fan, cover, lock | entity rows; template `primary` / `secondary` / `color` are rendered live by HA |
 | `media-control`, `custom:yet-another-media-player`, Mushroom media | media card |
 | `custom:weather-forecast-card`, `weather-forecast` | current conditions + hourly/daily forecast |
-| `custom:calendar-card-pro`, `calendar` | event list grouped by day |
+| `custom:calendar-card-pro`, `calendar`, `custom:atomic-calendar-revive` | event list grouped by day with per-day weather and font sizes; month grid for `dayGridMonth` and atomic Calendar mode |
 | `custom:mini-graph-card`, `sensor` with `graph:` | sparkline from HA long-term statistics |
 | `picture-entity`, `picture-glance`, `custom:advanced-camera-card` | refreshing snapshots, PTZ arrows |
 | `todo-list` | live list: check off and add items |
-| `markdown` | rendered text, templates included |
+| `markdown` | rendered text, templates included; common `card_mod` styles (font size/weight, alignment, colors, corner radius) |
 | `clock` | clock |
 | `custom:universal-remote-card` | remote |
 | `custom:bubble-card` pop-ups | bottom sheet, opened by a `#hash` action |
@@ -76,7 +79,7 @@ Each entity row shows a control that fits the domain: a switch for lights, switc
 
 ## Not yet
 
-Map card (needs internet map tiles) · live camera video · `card_mod` styling ([#11](https://github.com/TheDevRo/LightHA/issues/11)) · calendar views other than the list ([#10](https://github.com/TheDevRo/LightHA/issues/10)) · HA login flow and mDNS discovery (setup uses a token for now) · drag-and-drop editing · speaker grouping and media browsing.
+Map card (needs internet map tiles) · live camera video · `card_mod` on cards other than markdown · calendar weather per event · mDNS discovery · drag-and-drop editing · speaker grouping and media browsing.
 
 ## Project layout
 
