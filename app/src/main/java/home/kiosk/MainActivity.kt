@@ -8,6 +8,8 @@ import android.util.Log
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Bundle
 import android.os.SystemClock
 import android.os.PowerManager
@@ -42,6 +44,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -101,6 +104,15 @@ class MainActivity : ComponentActivity() {
 
         val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope, settings.haRefresh).also { this.ha = it }
         val lovelace = Lovelace(ha, lifecycleScope, prefs)
+        val voice = Voice(ha, settings.haUrl, lifecycleScope, settings)
+
+        // Wake word: listens while no Assist turn is running, hands the mic over when it hears its word.
+        wake = WakeWordListener(this, onMicBroken = { settings.micBroken = true }) { wakeScreen(); beep(); voice.start(settings.voicePipeline) }
+        lifecycleScope.launch {
+            combine(voice.state, snapshotFlow { (settings.wakeWord to settings.wakeSensitivity).takeIf { !settings.micBroken } }) { turn, w -> w.takeIf { turn == null } }
+                .distinctUntilChanged()
+                .collect { w -> if (w == null) wake?.stop() else wake?.start(w.first, w.second) }
+        }
         ha.start()
 
         // Follow the chosen entity even while Android's own screensaver (e.g. ImmichFrame) covers the app,
@@ -129,13 +141,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             CompositionLocalProvider(LocalSettings provides settings, LocalHa provides ha) {
                 MaterialTheme(colorScheme = darkColorScheme(primary = Amber, onPrimary = CardBg, background = Bg, surface = Bg)) {
-                    Box(Modifier.fillMaxSize().background(Bg)) { Home(ha, lovelace, onReconnect = ::recreate) }
+                    Box(Modifier.fillMaxSize().background(Bg)) { Home(ha, lovelace, voice, onReconnect = ::recreate) }
                 }
             }
         }
     }
 
     override fun onDestroy() {
+        wake?.stop()
         unregisterReceiver(battery)
         motion?.stop()
         ha?.stop()
@@ -173,6 +186,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun reportMotion(on: Boolean) = report(Sensor("camera_motion", "Camera motion", on, "motion"))
+
+    private var wake: WakeWordListener? = null
+
+    private fun beep() = ToneGenerator(AudioManager.STREAM_MUSIC, 70).let { t ->
+        t.startTone(ToneGenerator.TONE_PROP_ACK, 150)
+        window.decorView.postDelayed({ t.release() }, 300)
+    }
 
     private var mobile: MobileApp? = null
     /** Latest value of every sensor, by id. */
@@ -225,7 +245,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
+private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, onReconnect: () -> Unit) {
     val settings = LocalSettings.current
     val activity = LocalContext.current as MainActivity
     val states by ha.states.collectAsStateWithLifecycle()
@@ -385,6 +405,11 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
                     }
                 }) { Text("SAVE") }
             } else {
+                // Amber while the wake word is listening: the only sign the mic is open (Android 7 shows none).
+                val hearing by wakeListening.collectAsStateWithLifecycle()
+                if (settings.voiceButton || settings.wakeWord.isNotEmpty()) IconButton(onClick = { voice.start(settings.voicePipeline) }) {
+                    Icon(Icons.Rounded.Mic, "Ask Assist", tint = if (hearing) Amber else TextDim)
+                }
                 IconButton(onClick = { guarded { showSettings = true } }) { Icon(Icons.Rounded.Settings, "Settings", tint = TextDim) }
                 IconButton(onClick = { guarded { sheet = true } }) { Icon(Icons.Rounded.Edit, "Edit dashboard", tint = TextDim) }
             }
@@ -406,6 +431,9 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
     }
 
     if (saver) Screensaver(onWake = { saver = false; lastTouch[0] = System.currentTimeMillis() })
+
+    val talking by voice.state.collectAsStateWithLifecycle()
+    talking?.let { VoiceOverlay(it, onClose = voice::stop) }
 
     pinFor?.let { action ->
         PinDialog("Enter PIN", onDismiss = { pinFor = null }) { if (it == settings.pin) { pinFor = null; action(); true } else false }

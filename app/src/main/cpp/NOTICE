@@ -1,0 +1,8 @@
+The wake word engine in this directory comes from the Home Assistant Companion
+for Android (https://github.com/home-assistant/android, commit 42ade0d), licensed
+under the Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
+Changes: the JNI class name (home/kiosk/MicroWakeWord) and the HWASan block in
+CMakeLists.txt were removed or adapted for LightHA.
+
+The wake word models in app/src/main/assets/wakeword come from
+https://github.com/esphome/micro-wake-word-models (Apache-2.0).
