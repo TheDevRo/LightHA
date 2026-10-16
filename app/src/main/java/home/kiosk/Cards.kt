@@ -114,6 +114,7 @@ private fun CardBody(card: JSONObject, ctx: CardContext, top: Boolean) {
         }
         type == "clock" -> Clock()
         isMediaCard(card) -> MediaCard(card, ctx)
+        isGraphCard(card) -> GraphCard(card, ctx)
         isCalendarCard(card) -> CalendarCard(card, ctx)
         isWeatherCard(card) -> WeatherCard(card, ctx)
         isRemoteCard(card) -> RemoteCard(card, ctx)
