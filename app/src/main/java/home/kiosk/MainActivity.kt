@@ -6,6 +6,7 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -57,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -360,16 +362,22 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
 /** One view: badges, then its sections in a staggered grid. */
 @Composable
 private fun ViewPage(cfg: JSONObject, view: Int, ctx: CardContext, editsFor: (Int, Int) -> SectionEdits?) {
-    LazyVerticalStaggeredGrid(
-        columns = StaggeredGridCells.Adaptive(300.dp),
-        contentPadding = PaddingValues(20.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalItemSpacing = 16.dp,
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        item(span = StaggeredGridItemSpan.FullLine) { Badges(badgesOf(cfg, view), ctx) }
-        sectionsOf(cfg, view).forEachIndexed { s, cards ->
-            item(key = "v$view-s$s") { Section(cards, ctx, editsFor(view, s)) }
+    Box(Modifier.fillMaxSize()) {
+        // The view's HA background image, faded to its opacity, under the cards (decoded once, cached).
+        viewBackground(viewsOf(cfg).getOrNull(view))?.let { (url, alpha) ->
+            rememberImage(url)?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alpha = alpha) }
+        }
+        LazyVerticalStaggeredGrid(
+            columns = StaggeredGridCells.Adaptive(300.dp),
+            contentPadding = PaddingValues(20.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalItemSpacing = 16.dp,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            item(span = StaggeredGridItemSpan.FullLine) { Badges(badgesOf(cfg, view), ctx) }
+            sectionsOf(cfg, view).forEachIndexed { s, cards ->
+                item(key = "v$view-s$s") { Section(cards, ctx, editsFor(view, s)) }
+            }
         }
     }
 }

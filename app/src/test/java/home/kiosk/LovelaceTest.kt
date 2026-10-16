@@ -88,6 +88,13 @@ class LovelaceTest {
         assertFalse(visible(j("""{"visibility":[{"condition":"not","conditions":[{"condition":"state","entity_id":"climate.ac","state":["off"]}]}]}"""), states))
     }
 
+    @Test fun viewBackgrounds() {
+        assertEquals("/local/wallpaper.jpg" to 0.6f, viewBackground(j("""{"background":{"image":{"media_content_id":"/local/wallpaper.jpg"},"opacity":60}}""")))
+        assertEquals("/local/wallpaper.jpg" to 0.33f, viewBackground(j("""{"background":{"image":"/local/wallpaper.jpg","opacity":33}}""")))
+        assertEquals(null, viewBackground(j("""{"title":"no background"}""")))
+        assertEquals(null, viewBackground(null))
+    }
+
     @Test fun popupsByHash() {
         val c = j("""{"views":[{"sections":[{"cards":[{"type":"custom:bubble-card","card_type":"pop-up","hash":"#pop-up-calendar","cards":[{"type":"heading"}]}]}]}]}""")
         assertEquals(1, popupsOf(c)["#pop-up-calendar"]!!.size)
