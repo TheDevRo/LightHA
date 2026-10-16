@@ -73,10 +73,15 @@ fun interface Call {
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun EntityRow(e: Entity, label: String, call: Call, onLock: (Entity, String) -> Unit, onTap: (() -> Unit)? = null, onHold: (() -> Unit)? = null, onDoubleTap: (() -> Unit)? = null) {
+fun EntityRow(
+    e: Entity, label: String, call: Call, onLock: (Entity, String) -> Unit,
+    onTap: (() -> Unit)? = null, onHold: (() -> Unit)? = null, onDoubleTap: (() -> Unit)? = null,
+    /** Mushroom template card overrides: secondary line and icon colour (null colour = inactive grey). */
+    secondary: String? = null, templateColor: Color? = null, hasTemplateColor: Boolean = false,
+) {
     val kind = kindOf(e)
-    val active = isActive(e)
-    val accent = accentOf(e, kind)
+    val active = if (hasTemplateColor) templateColor != null else isActive(e)
+    val accent = templateColor ?: accentOf(e, kind)
     val defaultTap: (() -> Unit)? = tapService(e)?.let { s ->
         { if (kind == Kind.LOCK) onLock(e, s) else call(e.domain, s, listOf(e.id), null) }
     }
@@ -100,7 +105,7 @@ fun EntityRow(e: Entity, label: String, call: Call, onLock: (Entity, String) -> 
         val readout = kind == Kind.READOUT
         Column(Modifier.weight(1f)) {
             Text(label, color = if (e.unavailable) TextDim else Color.White, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (!readout) stateText(e).takeIf { it.isNotEmpty() }?.let {
+            if (!readout) (secondary ?: stateText(e)).takeIf { it.isNotEmpty() }?.let {
                 Text(it, color = TextDim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -138,6 +143,19 @@ fun RoundButton(icon: ImageVector, bg: Color = Chip, tint: Color = Color.White, 
         Modifier.size(size.dp).clip(CircleShape).background(bg).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Icon(icon, null, tint = tint, modifier = Modifier.size((size * 0.55f).dp)) }
+}
+
+/** Mushroom's named colours (and #hex). Greys and "disabled" mean "inactive" → null. */
+fun mushroomColor(name: String?): Color? = when (name?.trim()?.lowercase()) {
+    null, "", "grey", "gray", "dark-grey", "dark-gray", "disabled", "none", "black" -> null
+    "red" -> Color(0xFFF44336); "pink" -> Color(0xFFE91E63); "purple" -> Color(0xFF9C27B0)
+    "deep-purple" -> Color(0xFF673AB7); "indigo" -> Color(0xFF3F51B5); "blue" -> Color(0xFF2196F3)
+    "light-blue" -> Color(0xFF03A9F4); "cyan" -> Color(0xFF00BCD4); "teal" -> Color(0xFF009688)
+    "green" -> Color(0xFF4CAF50); "light-green" -> Color(0xFF8BC34A); "lime" -> Color(0xFFCDDC39)
+    "yellow" -> Color(0xFFFFEB3B); "amber" -> Color(0xFFFFC107); "orange" -> Color(0xFFFF9800)
+    "deep-orange" -> Color(0xFFFF5722); "brown" -> Color(0xFF795548); "blue-grey" -> Color(0xFF607D8B)
+    "white" -> Color.White
+    else -> name.trim().takeIf { it.startsWith("#") }?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
 }
 
 private fun accentOf(e: Entity, kind: Kind): Color = when (kind) {

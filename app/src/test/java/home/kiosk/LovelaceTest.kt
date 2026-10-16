@@ -95,6 +95,14 @@ class LovelaceTest {
         assertEquals(null, viewBackground(null))
     }
 
+    @Test fun textTreatsJsonNullAsEmpty() {
+        val o = j("""{"a":null,"b":"x"}""")
+        assertEquals("", o.text("a"))
+        assertEquals("fallback", o.text("a", "fallback"))
+        assertEquals("x", o.text("b"))
+        assertEquals("", o.text("missing"))
+    }
+
     @Test fun popupsByHash() {
         val c = j("""{"views":[{"sections":[{"cards":[{"type":"custom:bubble-card","card_type":"pop-up","hash":"#pop-up-calendar","cards":[{"type":"heading"}]}]}]}]}""")
         assertEquals(1, popupsOf(c)["#pop-up-calendar"]!!.size)

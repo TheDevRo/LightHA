@@ -55,14 +55,14 @@ fun stateText(e: Entity): String {
             }
         }
         Kind.COVER -> a.optNum("current_position")?.let { "${it.toInt()}% open" } ?: cap(e.state)
-        Kind.MEDIA -> listOf(a.optString("media_title"), a.optString("media_artist"))
+        Kind.MEDIA -> listOf(a.text("media_title"), a.text("media_artist"))
             .filter { it.isNotEmpty() }.joinToString(" — ").ifEmpty { cap(e.state) }
         Kind.READOUT ->
-            if (e.domain == "binary_sensor") binaryText(a.optString("device_class"), e.state == "on")
-            else if (a.optString("device_class") == "timestamp") timeText(e.state)
+            if (e.domain == "binary_sensor") binaryText(a.text("device_class"), e.state == "on")
+            else if (a.text("device_class") == "timestamp") timeText(e.state)
             else if (e.domain == "weather") weatherText(e.state)
-            else e.state.toDoubleOrNull()?.let { num(it) + unit(a.optString("unit_of_measurement")) } ?: cap(e.state)
-        Kind.NUMBER -> e.state.toDoubleOrNull()?.let { num(it) + unit(a.optString("unit_of_measurement")) } ?: cap(e.state)
+            else e.state.toDoubleOrNull()?.let { num(it) + unit(a.text("unit_of_measurement")) } ?: cap(e.state)
+        Kind.NUMBER -> e.state.toDoubleOrNull()?.let { num(it) + unit(a.text("unit_of_measurement")) } ?: cap(e.state)
         Kind.ACTION -> ""
         else -> cap(e.state)
     }
@@ -111,7 +111,7 @@ fun supports(e: Entity, flag: Int) = e.attributes.optLong("supported_features") 
 fun mediaPosition(e: Entity, now: Date = Date()): Double? {
     val pos = e.attributes.optNum("media_position") ?: return null
     if (e.state != "playing") return pos
-    val at = parseIso(e.attributes.optString("media_position_updated_at")) ?: return pos
+    val at = parseIso(e.attributes.text("media_position_updated_at")) ?: return pos
     val dur = e.attributes.optNum("media_duration") ?: Double.MAX_VALUE
     return (pos + (now.time - at.time) / 1000.0).coerceIn(0.0, dur)
 }
@@ -123,7 +123,7 @@ fun activePlayer(ids: List<String>, states: Map<String, Entity>): String? =
 /** 222 -> "3:42". */
 fun clockText(seconds: Double): String = "%d:%02d".format(Locale.US, seconds.toInt() / 60, seconds.toInt() % 60)
 
-private fun weatherText(state: String) = when (state) {
+fun weatherText(state: String) = when (state) {
     "partlycloudy" -> "Partly cloudy"
     "clear-night" -> "Clear"
     "lightning-rainy" -> "Thunderstorms"

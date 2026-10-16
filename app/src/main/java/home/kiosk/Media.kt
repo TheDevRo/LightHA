@@ -91,9 +91,9 @@ fun MediaCard(card: JSONObject, ctx: CardContext) {
                 Art(e)
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x33000000), Color(0xEE17191E)))))
                 Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
-                    Text(e.attributes.optString("media_title").ifEmpty { e.name }, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(e.attributes.text("media_title").ifEmpty { e.name }, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        listOf(e.attributes.optString("media_artist"), cardTitle(card, e)).filter { it.isNotEmpty() }.joinToString(" · "),
+                        listOf(e.attributes.text("media_artist"), cardTitle(card, e)).filter { it.isNotEmpty() }.joinToString(" · "),
                         color = Color(0xFFCCCCCC), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -125,7 +125,7 @@ private fun cardTitle(card: JSONObject, e: Entity) = card.optString("name").ifEm
 
 @Composable
 private fun Art(e: Entity) {
-    val img = rememberImage(e.attributes.optString("entity_picture").takeIf { it.isNotEmpty() })
+    val img = rememberImage(e.attributes.text("entity_picture").takeIf { it.isNotEmpty() })
     if (img != null) Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
     else Box(Modifier.fillMaxSize().background(Chip))
 }
@@ -185,22 +185,24 @@ private fun PlayerChips(ids: List<String>, current: String, states: Map<String, 
 private val imageHttp = OkHttpClient()
 private val imageCache = LruCache<String, ImageBitmap>(12)
 
-/** Loads an HA-relative or absolute image URL, downsampled to ~600px. Null while loading or on failure. */
+/** Fetches and decodes an image, downsampled to ~[maxPx] wide. Null on any failure. */
+suspend fun fetchImage(fullUrl: String, maxPx: Int = 600): ImageBitmap? = withContext(Dispatchers.IO) {
+    runCatching {
+        val bytes = imageHttp.newCall(Request.Builder().url(fullUrl).build()).execute().use { it.body!!.bytes() }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= maxPx) sample *= 2
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+    }.getOrNull()
+}
+
+/** Loads an HA-relative or absolute image URL, cached. Null while loading or on failure. */
 @Composable
 fun rememberImage(url: String?): ImageBitmap? {
     val base = LocalSettings.current.haUrl.trimEnd('/')
     return produceState(url?.let(imageCache::get), url) {
-    if (url == null || value != null) return@produceState
-    val full = if (url.startsWith("/")) base + url else url
-    value = withContext(Dispatchers.IO) {
-        runCatching {
-            val bytes = imageHttp.newCall(Request.Builder().url(full).build()).execute().use { it.body!!.bytes() }
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-            var sample = 1
-            while (bounds.outWidth / (sample * 2) >= 600) sample *= 2
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
-        }.getOrNull()
-    }?.also { imageCache.put(url, it) }
+        if (url == null || value != null) return@produceState
+        value = fetchImage(if (url.startsWith("/")) base + url else url)?.also { imageCache.put(url, it) }
     }.value
 }
