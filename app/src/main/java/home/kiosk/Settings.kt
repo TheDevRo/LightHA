@@ -38,6 +38,11 @@ class Settings(private val prefs: SharedPreferences) {
     var voiceButton by bool("voice_button", false)
     /** On-tablet wake word id from [WAKE_WORDS]; empty = off. */
     var wakeWord by string("wake_word", "")
+    /**
+     * Set when Android's audio service died while recording (LineageOS 14.1 on the Fire HD6 crashes it on any
+     * capture). Keeps the mic closed across restarts until a wake word or the Assist button is chosen again.
+     */
+    var micBroken by bool("mic_broken", false)
     /** 1 low, 0 medium, -1 high; see [wakeCutoff]. */
     var wakeSensitivity by int("wake_sensitivity", 0)
     /** Assist pipeline id; empty = HA's preferred pipeline. */

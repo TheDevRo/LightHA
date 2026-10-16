@@ -79,7 +79,7 @@ fun voiceStep(s: VoiceState, event: JSONObject): VoiceState {
  * Push-to-talk Assist: streams the mic to an HA pipeline over the existing WebSocket, shows what was heard and the
  * answer, and plays the spoken reply. HA's own voice detection decides when you've stopped talking.
  */
-class Voice(private val ha: HaClient, private val baseUrl: String, private val scope: CoroutineScope) {
+class Voice(private val ha: HaClient, private val baseUrl: String, private val scope: CoroutineScope, private val settings: Settings) {
     private val _state = MutableStateFlow<VoiceState?>(null)
     /** null = nothing on screen. */
     val state: StateFlow<VoiceState?> = _state
@@ -95,6 +95,7 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
         job?.cancel()
         _state.value = VoiceState()
         job = scope.launch {
+            if (settings.micBroken) { fail(MIC_BROKEN); return@launch }
             val sub = ha.subscribe("assist_pipeline/run", {
                 put("start_stage", "stt")
                 put("end_stage", "tts")
@@ -115,7 +116,7 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
                     val until = SystemClock.elapsedRealtime() + 15_000
                     while (_state.value?.phase == VoicePhase.LISTENING && SystemClock.elapsedRealtime() < until) {
                         val n = mic.read(buf, 0, buf.size)
-                        if (n < 0) break // audio service died; see WakeWordListener
+                        if (n < 0) { settings.micBroken = true; break } // audio service died; see Settings.micBroken
                         if (n > 0) ha.sendBinary(byteArrayOf(handler.toByte()) + buf.copyOf(n))
                     }
                     mic.stop()
@@ -124,6 +125,7 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
                 mic.release(); mic = null
 
                 val done = withTimeoutOrNull(30_000) { _state.first { it == null || it.phase >= VoicePhase.SPEAKING } }
+                if (settings.micBroken) { fail(MIC_BROKEN); return@launch }
                 if (done == null) { fail("Home Assistant didn't answer."); return@launch }
                 done.ttsUrl?.let { play(if (it.startsWith("http")) it else baseUrl.trimEnd('/') + it) }
                 _state.update { it?.takeIf { s -> s.phase == VoicePhase.ERROR } ?: it?.copy(phase = VoicePhase.DONE) }
@@ -160,6 +162,7 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
     companion object {
         private const val TAG = "Voice"
         private const val RATE = 16_000
+        const val MIC_BROKEN = "This tablet's microphone crashed Android's audio service, so it's switched off. Choose a wake word or the Assist button again in Settings to retry."
     }
 }
 

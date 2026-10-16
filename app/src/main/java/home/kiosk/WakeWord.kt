@@ -67,7 +67,7 @@ class MicroWakeWord(model: ByteBuffer, stepMs: Int, cutoff: Float, window: Int) 
  * Listens on its own thread until the wake word is heard, then lets go of the mic (so Assist can have it) and
  * calls [onWake] on the main thread. Start it again for the next one.
  */
-class WakeWordListener(private val context: Context, private val onWake: () -> Unit) {
+class WakeWordListener(private val context: Context, private val onMicBroken: () -> Unit, private val onWake: () -> Unit) {
     @Volatile private var running = false
     private var thread: Thread? = null
 
@@ -106,7 +106,7 @@ class WakeWordListener(private val context: Context, private val onWake: () -> U
                     val n = m.read(chunk, 0, chunk.size)
                     // Some ROMs (LineageOS 14.1 on the Fire HD6) crash Android's audio service on any capture. Don't retry:
                     // every new AudioRecord crashes it again.
-                    if (n < 0) { Log.w(TAG, "mic read error $n"); wakeError.value = "This tablet's microphone isn't working (Android's audio service crashed)."; return }
+                    if (n < 0) { Log.w(TAG, "mic read error $n"); Handler(Looper.getMainLooper()).post(onMicBroken); return }
                     if (n > 0 && engine.process(if (n == chunk.size) chunk else chunk.copyOf(n))) {
                         Log.i(TAG, "heard $id")
                         running = false

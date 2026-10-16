@@ -225,21 +225,22 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
 
             Group("Voice") {
                 val context = LocalContext.current
-                val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { settings.voiceButton = it }
+                val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { settings.voiceButton = it; if (it) settings.micBroken = false }
                 Toggle("Assist button (push to talk)", settings.voiceButton) { on ->
                     val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-                    if (on && !granted) askMic.launch(Manifest.permission.RECORD_AUDIO) else settings.voiceButton = on
+                    if (on && !granted) askMic.launch(Manifest.permission.RECORD_AUDIO) else { settings.voiceButton = on; if (on) settings.micBroken = false }
                 }
                 var pendingWake by remember { mutableStateOf("") }
-                val askMicWake = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) settings.wakeWord = pendingWake }
+                val askMicWake = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) { settings.wakeWord = pendingWake; settings.micBroken = false } }
                 Text("Wake word", color = Color.White, fontSize = 15.sp)
                 Choices(listOf(-1 to "Off") + WAKE_WORDS.mapIndexed { i, w -> i to w.second }, WAKE_WORDS.indexOfFirst { it.first == settings.wakeWord }) { i ->
                     val id = WAKE_WORDS.getOrNull(i)?.first.orEmpty()
                     val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-                    if (id.isNotEmpty() && !granted) { pendingWake = id; askMicWake.launch(Manifest.permission.RECORD_AUDIO) } else settings.wakeWord = id
+                    if (id.isNotEmpty() && !granted) { pendingWake = id; askMicWake.launch(Manifest.permission.RECORD_AUDIO) } else { settings.wakeWord = id; if (id.isNotEmpty()) settings.micBroken = false }
                 }
                 val wakeProblem by wakeError.collectAsStateWithLifecycle()
-                if (settings.wakeWord.isNotEmpty()) wakeProblem?.let { Text(it, color = Color(0xFFE57373), fontSize = 13.sp) }
+                (if (settings.micBroken) Voice.MIC_BROKEN else wakeProblem.takeIf { settings.wakeWord.isNotEmpty() })
+                    ?.let { Text(it, color = Color(0xFFE57373), fontSize = 13.sp) }
                 if (settings.wakeWord.isNotEmpty()) {
                     Text("Wake word sensitivity", color = Color.White, fontSize = 15.sp)
                     Choices(listOf(1 to "Low", 0 to "Medium", -1 to "High"), settings.wakeSensitivity) { settings.wakeSensitivity = it }

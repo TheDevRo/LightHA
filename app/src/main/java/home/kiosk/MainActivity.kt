@@ -104,12 +104,12 @@ class MainActivity : ComponentActivity() {
 
         val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope, settings.haRefresh).also { this.ha = it }
         val lovelace = Lovelace(ha, lifecycleScope, prefs)
-        val voice = Voice(ha, settings.haUrl, lifecycleScope)
+        val voice = Voice(ha, settings.haUrl, lifecycleScope, settings)
 
         // Wake word: listens while no Assist turn is running, hands the mic over when it hears its word.
-        wake = WakeWordListener(this) { wakeScreen(); beep(); voice.start(settings.voicePipeline) }
+        wake = WakeWordListener(this, onMicBroken = { settings.micBroken = true }) { wakeScreen(); beep(); voice.start(settings.voicePipeline) }
         lifecycleScope.launch {
-            combine(voice.state, snapshotFlow { settings.wakeWord to settings.wakeSensitivity }) { turn, w -> w.takeIf { turn == null } }
+            combine(voice.state, snapshotFlow { (settings.wakeWord to settings.wakeSensitivity).takeIf { !settings.micBroken } }) { turn, w -> w.takeIf { turn == null } }
                 .distinctUntilChanged()
                 .collect { w -> if (w == null) wake?.stop() else wake?.start(w.first, w.second) }
         }
