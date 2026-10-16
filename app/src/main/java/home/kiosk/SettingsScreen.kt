@@ -70,7 +70,8 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
     val dashboard by lovelace.urlPath.collectAsStateWithLifecycle()
     var dashboards by remember { mutableStateOf<List<DashboardInfo>>(emptyList()) }
     var haVersion by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(status) {
+    val me by ha.user.collectAsStateWithLifecycle()
+    LaunchedEffect(status, me) { // re-list once we know who's signed in (admin-only dashboards drop out)
         if (status == Status.CONNECTED) {
             dashboards = runCatching { lovelace.dashboards() }.getOrDefault(dashboards)
             haVersion = runCatching { (ha.request("get_config") as JSONObject).optString("version") }.getOrNull()
@@ -148,6 +149,7 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 Group("Views") {
                     Text("Switched-off views don't get a tab, but cards can still open them.", color = TextDim, fontSize = 13.sp)
                     viewsOf(cfg).forEachIndexed { i, v ->
+                        if (!viewVisible(v, me?.id)) return@forEachIndexed // HA hides it from this user
                         val key = viewKey(v, i)
                         Toggle(viewTitle(v, i) + if (v.optBoolean("subview")) " (subview)" else "", !settings.isViewHidden(dashboard, key)) {
                             settings.setViewHidden(dashboard, key, !it)

@@ -1,5 +1,6 @@
 package home.kiosk
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
@@ -72,7 +73,9 @@ fun DashboardSheet(lovelace: Lovelace, onEditHere: () -> Unit, onDismiss: () -> 
                     Text("Edit on your phone", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                     Text("Scan to open this dashboard in Home Assistant's editor. The tablet updates when you save.", color = TextDim, fontSize = 13.sp)
                     Spacer(Modifier.height(12.dp))
-                    if (!LocalSettings.current.allowTabletEditing) {
+                    if (LocalHa.current.user.collectAsStateWithLifecycle().value?.isAdmin == false) {
+                        Text("Editing needs an admin account. Pick a dashboard below.", color = TextDim, fontSize = 12.sp)
+                    } else if (!LocalSettings.current.allowTabletEditing) {
                         Text("Editing on this tablet is off (Settings).", color = TextDim, fontSize = 12.sp)
                     } else if (lovelace.editable) {
                         Button(onClick = onEditHere) { Text("Edit on this tablet") }
