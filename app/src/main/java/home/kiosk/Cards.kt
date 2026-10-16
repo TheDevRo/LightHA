@@ -115,6 +115,8 @@ private fun CardBody(card: JSONObject, ctx: CardContext, top: Boolean) {
         type == "clock" -> Clock()
         isMediaCard(card) -> MediaCard(card, ctx)
         isGraphCard(card) -> GraphCard(card, ctx)
+        isCalendarCard(card) -> CalendarCard(card, ctx)
+        isWeatherCard(card) -> WeatherCard(card, ctx)
         isRemoteCard(card) -> RemoteCard(card, ctx)
         isPopup(card) -> if (ctx.editing) Placeholder("Pop-up · ${popupTitle(card)}", top)
         type in ENTITY_CARDS && card.has("entity") -> Surface(top) { EntityCard(card, ctx) }
@@ -131,7 +133,13 @@ private fun EntityCard(card: JSONObject, ctx: CardContext) {
         if (ctx.editing) Placeholder("missing: $id", top = false)
         return
     }
-    val label = cardName(card) ?: e.name
+    val isTemplate = card.optString("type") == "custom:mushroom-template-card"
+    // Template cards: HA renders primary/secondary/color live; until then the plain name and state show.
+    val primary = if (isTemplate) rememberTemplate(card.optString("primary").takeIf { it.isNotEmpty() }, id) else null
+    val secondary = if (isTemplate) rememberTemplate(card.optString("secondary").takeIf { it.isNotEmpty() }, id) else null
+    val colorSrc = card.optString("icon_color").ifEmpty { card.optString("color") }.takeIf { isTemplate && it.isNotEmpty() }
+    val color = colorSrc?.let { rememberTemplate(it, id) }
+    val label = primary?.takeIf { "{{" !in it && "{%" !in it } ?: cardName(card) ?: e.name
     // No tap_action and nothing sensible to toggle (thermostat, sensor): open more-info, like HA.
     val onTap = ctx.runner(tapAct(card, id), id) ?: if (tapService(e) == null) ({ ctx.openMoreInfo(id) }) else null
     EntityRow(
@@ -139,6 +147,9 @@ private fun EntityCard(card: JSONObject, ctx: CardContext) {
         onHold = ctx.runner(holdAct(card, id), id),
         // Only when configured: listening for double taps delays every single tap slightly.
         onDoubleTap = card.optJSONObject("double_tap_action")?.let { ctx.runner(doubleTapAct(card, id), id) },
+        secondary = secondary?.takeIf { "{{" !in it && "{%" !in it },
+        templateColor = mushroomColor(color),
+        hasTemplateColor = color != null && "{{" !in color,
     )
 }
 
