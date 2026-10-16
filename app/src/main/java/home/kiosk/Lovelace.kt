@@ -44,10 +44,12 @@ class Lovelace(private val ha: HaClient, private val scope: CoroutineScope, priv
 
     private suspend fun fetch() = ha.request("lovelace/config") { put("url_path", urlPath.value) } as JSONObject
 
+    /** Storage dashboards, minus admin-only ones for non-admins (as HA's sidebar does). */
     suspend fun dashboards(): List<DashboardInfo> {
         val arr = ha.request("lovelace/dashboards/list") as JSONArray
+        val admin = ha.user.value?.isAdmin != false // unknown yet: don't hide anything from an admin
         return (0 until arr.length()).map { arr.getJSONObject(it) }
-            .filter { it.optString("mode") == "storage" }
+            .filter { it.optString("mode") == "storage" && (admin || !it.optBoolean("require_admin")) }
             .map { DashboardInfo(it.getString("url_path"), it.optString("title", it.getString("url_path"))) }
     }
 
@@ -87,6 +89,13 @@ fun JSONObject.text(key: String, default: String = ""): String = if (isNull(key)
 fun viewsOf(config: JSONObject): List<JSONObject> = config.optJSONArray("views")?.objects().orEmpty()
 
 /** Stable id for a view: its URL path, else its position. Used for show/hide and "last view". */
+/** A view's `visible` setting: absent/true = everyone, false = no one, a list = only those {user: id} entries. */
+fun viewVisible(view: JSONObject, userId: String?): Boolean = when (val v = view.opt("visible")) {
+    is Boolean -> v
+    is JSONArray -> userId != null && v.objects().any { it.optString("user") == userId }
+    else -> true
+}
+
 fun viewKey(view: JSONObject, index: Int) = view.optString("path").ifEmpty { index.toString() }
 
 /** A view's `background`: image URL (string or {media_content_id}) and opacity 0..1 (HA stores percent). */

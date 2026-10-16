@@ -32,6 +32,9 @@ data class Entity(val id: String, val state: String, val attributes: JSONObject,
 
 enum class Status { NOT_CONFIGURED, CONNECTING, CONNECTED, AUTH_FAILED }
 
+/** Who the token or account belongs to. */
+data class HaUser(val id: String, val name: String, val isAdmin: Boolean)
+
 /**
  * Home Assistant WebSocket API client: auth, live entity states, service calls, request/response, lovelace_updated.
  * Authenticates with a long-lived [token], or, when signed in with an account, a [refreshToken] that's traded for
@@ -51,6 +54,9 @@ class HaClient(private val baseUrl: String, @Volatile private var token: String,
 
     private val _states = MutableStateFlow<Map<String, Entity>>(emptyMap())
     val states: StateFlow<Map<String, Entity>> = _states
+    private val _user = MutableStateFlow<HaUser?>(null)
+    /** The signed-in user, known shortly after connecting; null until then. */
+    val user: StateFlow<HaUser?> = _user
     private val _status = MutableStateFlow(Status.CONNECTING)
     val status: StateFlow<Status> = _status
     private val _dashboardSaved = MutableSharedFlow<String>(extraBufferCapacity = 16)
@@ -182,6 +188,10 @@ class HaClient(private val baseUrl: String, @Volatile private var token: String,
                     getStatesId = send("get_states")
                     subscriptions.forEach { it.id = send(it.type, it.fill) }
                     _status.value = Status.CONNECTED
+                    scope.launch {
+                        runCatching { request("auth/current_user") as JSONObject }
+                            .onSuccess { _user.value = HaUser(it.optString("id"), it.optString("name"), it.optBoolean("is_admin")) }
+                    }
                 }
                 "auth_invalid" -> {
                     Log.e(TAG, "auth_invalid: ${msg.optString("message")}")

@@ -107,4 +107,14 @@ class LovelaceTest {
         val c = j("""{"views":[{"sections":[{"cards":[{"type":"custom:bubble-card","card_type":"pop-up","hash":"#pop-up-calendar","cards":[{"type":"heading"}]}]}]}]}""")
         assertEquals(1, popupsOf(c)["#pop-up-calendar"]!!.size)
     }
+
+    @Test fun viewVisibilityPerUser() {
+        fun v(json: String) = org.json.JSONObject(json)
+        org.junit.Assert.assertTrue(viewVisible(v("""{"title":"Home"}"""), "u1"))
+        org.junit.Assert.assertFalse(viewVisible(v("""{"visible":false}"""), "u1"))
+        org.junit.Assert.assertTrue(viewVisible(v("""{"visible":[{"user":"u1"},{"user":"u2"}]}"""), "u2"))
+        org.junit.Assert.assertFalse(viewVisible(v("""{"visible":[{"user":"u1"}]}"""), "u3"))
+        org.junit.Assert.assertFalse(viewVisible(v("""{"visible":[{"user":"u1"}]}"""), null)) // user not known yet
+    }
 }
+

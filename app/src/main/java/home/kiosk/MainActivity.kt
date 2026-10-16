@@ -229,8 +229,11 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
     val editing = draft != null
     val cfg = draft ?: config
     val views = cfg?.let(::viewsOf).orEmpty()
-    // Tabs: every non-subview view the user hasn't switched off. Shown by default.
-    val tabs = views.indices.filter { !views[it].optBoolean("subview") && !settings.isViewHidden(dashboard, viewKey(views[it], it)) }
+    // Tabs: every non-subview view this HA user may see and the tablet hasn't switched off. Shown by default.
+    val user by ha.user.collectAsStateWithLifecycle()
+    val tabs = views.indices.filter {
+        !views[it].optBoolean("subview") && viewVisible(views[it], user?.id) && !settings.isViewHidden(dashboard, viewKey(views[it], it))
+    }
         .ifEmpty { views.indices.take(1) }
     val pager = rememberPagerState { tabs.size }
     val currentView = subview ?: tabs.getOrNull(pager.currentPage) ?: 0
