@@ -95,7 +95,23 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
         job?.cancel()
         _state.value = VoiceState()
         job = scope.launch {
-            if (settings.micBroken) { fail(MIC_BROKEN); return@launch }
+            // Whatever goes wrong inside (a hung reply, a mic that won't start), the turn ends and the overlay goes
+            // away, so the wake word gets the mic back.
+            val ok = runCatching { withTimeoutOrNull(TURN_MS) { turn(pipeline) } }
+            if (ok.exceptionOrNull() is kotlinx.coroutines.CancellationException) return@launch // stop() or a newer turn
+            if (ok.isFailure || ok.getOrNull() == null) {
+                Log.w(TAG, "turn ended badly: ${ok.exceptionOrNull() ?: "timed out"}")
+                _state.update { it?.copy(phase = VoicePhase.ERROR, reply = "Something went wrong. Try again.") }
+                delay(3_000)
+            }
+            _state.value = null
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun turn(pipeline: String) {
+        run {
+            if (settings.micBroken) { fail(MIC_BROKEN); return }
             val sub = ha.subscribe("assist_pipeline/run", {
                 put("start_stage", "stt")
                 put("end_stage", "tts")
@@ -105,11 +121,11 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
             var mic: AudioRecord? = null
             try {
                 val handler = withTimeoutOrNull(5_000) { _state.first { it == null || it.handler >= 0 || it.phase == VoicePhase.ERROR } }?.handler
-                if (handler == null || handler < 0) { fail("Home Assistant didn't start listening."); return@launch }
+                if (handler == null || handler < 0) { fail("Home Assistant didn't start listening."); return }
 
                 val size = maxOf(AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT), 3200)
                 mic = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size)
-                if (mic.state != AudioRecord.STATE_INITIALIZED) { fail("Microphone unavailable."); return@launch }
+                if (mic.state != AudioRecord.STATE_INITIALIZED) { fail("Microphone unavailable."); return }
                 withContext(Dispatchers.IO) {
                     mic.startRecording()
                     val buf = ByteArray(1024) // 32 ms of 16 kHz 16-bit mono
@@ -125,12 +141,13 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
                 mic.release(); mic = null
 
                 val done = withTimeoutOrNull(30_000) { _state.first { it == null || it.phase >= VoicePhase.SPEAKING } }
-                if (settings.micBroken) { fail(MIC_BROKEN); return@launch }
-                if (done == null) { fail("Home Assistant didn't answer."); return@launch }
-                done.ttsUrl?.let { play(if (it.startsWith("http")) it else baseUrl.trimEnd('/') + it) }
+                if (settings.micBroken) { fail(MIC_BROKEN); return }
+                if (done == null) { fail("Home Assistant didn't answer."); return }
+                done.ttsUrl?.let { url ->
+                    if (withTimeoutOrNull(PLAY_MS) { play(if (url.startsWith("http")) url else baseUrl.trimEnd('/') + url) } == null) Log.w(TAG, "tts playback timed out")
+                }
                 _state.update { it?.takeIf { s -> s.phase == VoicePhase.ERROR } ?: it?.copy(phase = VoicePhase.DONE) }
                 delay(4_000)
-                _state.value = null
             } finally {
                 mic?.release()
                 sub.cancel()
@@ -141,7 +158,6 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
     private suspend fun fail(message: String) {
         _state.update { it?.copy(phase = VoicePhase.ERROR, reply = message) }
         delay(4_000)
-        _state.value = null
     }
 
     /** Plays the reply and returns when it's done (or failed). */
@@ -162,6 +178,9 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
     companion object {
         private const val TAG = "Voice"
         private const val RATE = 16_000
+        /** Whole turn, listening through reply: 15 s mic + 30 s answer + reply + 4 s on screen fits. */
+        private const val TURN_MS = 90_000L
+        private const val PLAY_MS = 30_000L
         const val MIC_BROKEN = "This tablet's microphone crashed Android's audio service, so it's switched off. Choose a wake word or the Assist button again in Settings to retry."
     }
 }
