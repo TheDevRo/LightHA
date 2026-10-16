@@ -88,7 +88,7 @@ class MainActivity : ComponentActivity() {
         ha.start()
 
         setContent {
-            CompositionLocalProvider(LocalSettings provides settings) {
+            CompositionLocalProvider(LocalSettings provides settings, LocalHa provides ha) {
                 MaterialTheme(colorScheme = darkColorScheme(primary = Amber, onPrimary = CardBg, background = Bg, surface = Bg)) {
                     Box(Modifier.fillMaxSize().background(Bg)) { Home(ha, lovelace, onReconnect = ::recreate) }
                 }

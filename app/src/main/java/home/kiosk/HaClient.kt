@@ -91,6 +91,38 @@ class HaClient(private val baseUrl: String, private val token: String, private v
         }
     }
 
+    /** A live HA subscription (render_template, weather/subscribe_forecast, todo/item/subscribe…). */
+    inner class Subscription internal constructor(
+        val type: String, val fill: JSONObject.() -> Unit, val onEvent: (JSONObject) -> Unit,
+    ) {
+        @Volatile internal var id = -1
+
+        fun cancel() {
+            subscriptions.remove(this)
+            val old = id
+            if (old > 0 && _status.value == Status.CONNECTED) send("unsubscribe_events") { put("subscription", old) }
+        }
+    }
+
+    private val subscriptions = java.util.concurrent.CopyOnWriteArrayList<Subscription>()
+
+    /** Subscribes now (if connected) and again after every reconnect; [onEvent] gets each message's `event`. */
+    fun subscribe(type: String, fill: JSONObject.() -> Unit = {}, onEvent: (JSONObject) -> Unit): Subscription =
+        Subscription(type, fill, onEvent).also {
+            subscriptions += it
+            if (_status.value == Status.CONNECTED) it.id = send(type, fill)
+        }
+
+    /** Authenticated REST GET against HA (calendars and other endpoints the WebSocket API lacks). */
+    suspend fun getJson(path: String): Any = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val req = Request.Builder().url(baseUrl.trimEnd('/') + path).header("Authorization", "Bearer $token").build()
+        http.newCall(req).execute().use { r ->
+            if (!r.isSuccessful) throw IOException("GET $path: HTTP ${r.code}")
+            val body = r.body!!.string()
+            if (body.trimStart().startsWith("[")) JSONArray(body) else JSONObject(body)
+        }
+    }
+
     private fun send(type: String, fill: JSONObject.() -> Unit = {}): Int {
         val id = nextId.getAndIncrement()
         ws?.send(JSONObject().put("id", id).put("type", type).apply(fill).toString())
@@ -111,6 +143,7 @@ class HaClient(private val baseUrl: String, private val token: String, private v
                     send("subscribe_events") { put("event_type", "state_changed") }
                     send("subscribe_events") { put("event_type", "lovelace_updated") }
                     getStatesId = send("get_states")
+                    subscriptions.forEach { it.id = send(it.type, it.fill) }
                     _status.value = Status.CONNECTED
                 }
                 "auth_invalid" -> {
@@ -120,6 +153,10 @@ class HaClient(private val baseUrl: String, private val token: String, private v
                 }
                 else -> {
                     if (msg.optString("type") == "result") pending[msg.optInt("id")]?.complete(msg)
+                    if (msg.optString("type") == "event") {
+                        val id = msg.optInt("id")
+                        subscriptions.firstOrNull { it.id == id }?.let { s -> msg.optJSONObject("event")?.let(s.onEvent); return }
+                    }
                     val event = msg.optJSONObject("event")
                     if (event?.optString("event_type") == "lovelace_updated") {
                         _dashboardSaved.tryEmit(event.optJSONObject("data")?.optString("url_path").orEmpty())
