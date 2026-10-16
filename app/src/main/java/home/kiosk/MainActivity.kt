@@ -2,6 +2,7 @@ package home.kiosk
 
 import android.content.Context
 import android.os.Bundle
+import android.os.PowerManager
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -70,6 +71,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -88,6 +91,19 @@ class MainActivity : ComponentActivity() {
         val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope).also { this.ha = it }
         val lovelace = Lovelace(ha, lifecycleScope, prefs)
         ha.start()
+
+        // Follow the chosen entity even while Android's own screensaver (e.g. ImmichFrame) covers the app,
+        // when Compose is paused: on wakes the screen and keeps it on, off hands it back to the system timeout.
+        lifecycleScope.launch {
+            ha.states.map { it[settings.wakeEntity]?.let { e -> followAction(e, Long.MAX_VALUE, busy = false) } }
+                .distinctUntilChanged()
+                .collect { on ->
+                    if (on == null) return@collect
+                    followOn = on
+                    if (on) wakeScreen()
+                    applyWindow()
+                }
+        }
 
         setContent {
             CompositionLocalProvider(LocalSettings provides settings, LocalHa provides ha) {
@@ -109,12 +125,20 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) applyWindow()
     }
 
+    /** True while the followed entity is on: keeps the screen awake like [Settings.keepScreenOn]. */
+    private var followOn = false
+
+    /** Turns the screen on, which also ends a system screensaver. */
+    @Suppress("DEPRECATION") // no non-deprecated way to wake the screen from an app
+    private fun wakeScreen() = (getSystemService(POWER_SERVICE) as PowerManager)
+        .newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "kiosk:follow").acquire(3_000)
+
     /** True while the screensaver is showing: it dims the screen to its own brightness. */
     var saverActive = false
 
     /** Screen-on, brightness and fullscreen from [Settings]. */
     fun applyWindow() {
-        if (settings.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (settings.keepScreenOn || followOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.attributes = window.attributes.apply {
             screenBrightness = when {
