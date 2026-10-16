@@ -270,7 +270,7 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, onReconnect: ()
     var conflict by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf(false) }
     // First launch of a release build has no server yet: start in Settings.
-    var showSettings by remember { mutableStateOf(settings.haUrl.isBlank() || settings.haToken.isBlank()) }
+    var showSettings by remember { mutableStateOf(settings.haUrl.isBlank() || (settings.haToken.isBlank() && settings.haRefresh.isBlank())) }
     var pinFor by remember { mutableStateOf<(() -> Unit)?>(null) }
     var popup by remember { mutableStateOf<String?>(null) }
     var moreInfo by remember { mutableStateOf<String?>(null) }
