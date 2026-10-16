@@ -115,6 +115,7 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
                     val until = SystemClock.elapsedRealtime() + 15_000
                     while (_state.value?.phase == VoicePhase.LISTENING && SystemClock.elapsedRealtime() < until) {
                         val n = mic.read(buf, 0, buf.size)
+                        if (n < 0) break // audio service died; see WakeWordListener
                         if (n > 0) ha.sendBinary(byteArrayOf(handler.toByte()) + buf.copyOf(n))
                     }
                     mic.stop()

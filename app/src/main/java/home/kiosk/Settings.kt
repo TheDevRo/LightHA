@@ -36,6 +36,10 @@ class Settings(private val prefs: SharedPreferences) {
     var mobileWebhook by string("mobile_webhook", "")
     /** Mic button in the header for push-to-talk Assist. */
     var voiceButton by bool("voice_button", false)
+    /** On-tablet wake word id from [WAKE_WORDS]; empty = off. */
+    var wakeWord by string("wake_word", "")
+    /** 1 low, 0 medium, -1 high; see [wakeCutoff]. */
+    var wakeSensitivity by int("wake_sensitivity", 0)
     /** Assist pipeline id; empty = HA's preferred pipeline. */
     var voicePipeline by string("voice_pipeline", "")
     /** Empty = no PIN. */
