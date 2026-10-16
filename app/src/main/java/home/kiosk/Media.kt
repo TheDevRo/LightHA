@@ -185,22 +185,24 @@ private fun PlayerChips(ids: List<String>, current: String, states: Map<String, 
 private val imageHttp = OkHttpClient()
 private val imageCache = LruCache<String, ImageBitmap>(12)
 
-/** Loads an HA-relative or absolute image URL, downsampled to ~600px. Null while loading or on failure. */
+/** Fetches and decodes an image, downsampled to ~[maxPx] wide. Null on any failure. */
+suspend fun fetchImage(fullUrl: String, maxPx: Int = 600): ImageBitmap? = withContext(Dispatchers.IO) {
+    runCatching {
+        val bytes = imageHttp.newCall(Request.Builder().url(fullUrl).build()).execute().use { it.body!!.bytes() }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= maxPx) sample *= 2
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+    }.getOrNull()
+}
+
+/** Loads an HA-relative or absolute image URL, cached. Null while loading or on failure. */
 @Composable
 fun rememberImage(url: String?): ImageBitmap? {
     val base = LocalSettings.current.haUrl.trimEnd('/')
     return produceState(url?.let(imageCache::get), url) {
-    if (url == null || value != null) return@produceState
-    val full = if (url.startsWith("/")) base + url else url
-    value = withContext(Dispatchers.IO) {
-        runCatching {
-            val bytes = imageHttp.newCall(Request.Builder().url(full).build()).execute().use { it.body!!.bytes() }
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-            var sample = 1
-            while (bounds.outWidth / (sample * 2) >= 600) sample *= 2
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
-        }.getOrNull()
-    }?.also { imageCache.put(url, it) }
+        if (url == null || value != null) return@produceState
+        value = fetchImage(if (url.startsWith("/")) base + url else url)?.also { imageCache.put(url, it) }
     }.value
 }
