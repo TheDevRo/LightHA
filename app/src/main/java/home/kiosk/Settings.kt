@@ -34,6 +34,10 @@ class Settings(private val prefs: SharedPreferences) {
     var reportSensors by bool("report_sensors", false)
     /** The mobile_app webhook HA handed out when this tablet registered; empty = not registered yet. */
     var mobileWebhook by string("mobile_webhook", "")
+    /** Mic button in the header for push-to-talk Assist. */
+    var voiceButton by bool("voice_button", false)
+    /** Assist pipeline id; empty = HA's preferred pipeline. */
+    var voicePipeline by string("voice_pipeline", "")
     /** Empty = no PIN. */
     var pin by string("pin", "")
     private var hidden by string("hidden_views", "")

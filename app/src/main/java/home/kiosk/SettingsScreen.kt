@@ -223,6 +223,33 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 )
             }
 
+            Group("Voice") {
+                val context = LocalContext.current
+                val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { settings.voiceButton = it }
+                Toggle("Assist button (push to talk)", settings.voiceButton) { on ->
+                    val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                    if (on && !granted) askMic.launch(Manifest.permission.RECORD_AUDIO) else settings.voiceButton = on
+                }
+                if (settings.voiceButton) {
+                    var pipelines by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+                    var preferred by remember { mutableStateOf("") }
+                    LaunchedEffect(status) {
+                        if (status != Status.CONNECTED) return@LaunchedEffect
+                        runCatching { ha.request("assist_pipeline/pipeline/list") as JSONObject }.onSuccess { r ->
+                            val arr = r.getJSONArray("pipelines")
+                            pipelines = (0 until arr.length()).map { arr.getJSONObject(it).let { p -> p.getString("id") to p.optString("name") } }
+                            preferred = pipelines.firstOrNull { it.first == r.optString("preferred_pipeline") }?.second.orEmpty()
+                        }
+                    }
+                    Text("Pipeline", color = Color.White, fontSize = 15.sp)
+                    Choices(
+                        listOf(-1 to if (preferred.isEmpty()) "Default" else "Default ($preferred)") + pipelines.mapIndexed { i, p -> i to p.second },
+                        pipelines.indexOfFirst { it.first == settings.voicePipeline },
+                    ) { settings.voicePipeline = pipelines.getOrNull(it)?.first.orEmpty() }
+                    Text("Tap the mic in the header and talk. Home Assistant hears when you stop. Set up pipelines under Settings > Voice assistants in Home Assistant.", color = TextDim, fontSize = 13.sp)
+                }
+            }
+
             Group("Display") {
                 Toggle("Keep screen on", settings.keepScreenOn) { settings.keepScreenOn = it }
                 Toggle("Fullscreen (hide status and navigation bars)", settings.fullscreen) { settings.fullscreen = it }

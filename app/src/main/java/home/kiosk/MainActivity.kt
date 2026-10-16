@@ -42,6 +42,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -101,6 +102,7 @@ class MainActivity : ComponentActivity() {
 
         val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope, settings.haRefresh).also { this.ha = it }
         val lovelace = Lovelace(ha, lifecycleScope, prefs)
+        val voice = Voice(ha, settings.haUrl, lifecycleScope)
         ha.start()
 
         // Follow the chosen entity even while Android's own screensaver (e.g. ImmichFrame) covers the app,
@@ -129,7 +131,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             CompositionLocalProvider(LocalSettings provides settings, LocalHa provides ha) {
                 MaterialTheme(colorScheme = darkColorScheme(primary = Amber, onPrimary = CardBg, background = Bg, surface = Bg)) {
-                    Box(Modifier.fillMaxSize().background(Bg)) { Home(ha, lovelace, onReconnect = ::recreate) }
+                    Box(Modifier.fillMaxSize().background(Bg)) { Home(ha, lovelace, voice, onReconnect = ::recreate) }
                 }
             }
         }
@@ -225,7 +227,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
+private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, onReconnect: () -> Unit) {
     val settings = LocalSettings.current
     val activity = LocalContext.current as MainActivity
     val states by ha.states.collectAsStateWithLifecycle()
@@ -385,6 +387,7 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
                     }
                 }) { Text("SAVE") }
             } else {
+                if (settings.voiceButton) IconButton(onClick = { voice.start(settings.voicePipeline) }) { Icon(Icons.Rounded.Mic, "Ask Assist", tint = TextDim) }
                 IconButton(onClick = { guarded { showSettings = true } }) { Icon(Icons.Rounded.Settings, "Settings", tint = TextDim) }
                 IconButton(onClick = { guarded { sheet = true } }) { Icon(Icons.Rounded.Edit, "Edit dashboard", tint = TextDim) }
             }
@@ -406,6 +409,9 @@ private fun Home(ha: HaClient, lovelace: Lovelace, onReconnect: () -> Unit) {
     }
 
     if (saver) Screensaver(onWake = { saver = false; lastTouch[0] = System.currentTimeMillis() })
+
+    val talking by voice.state.collectAsStateWithLifecycle()
+    talking?.let { VoiceOverlay(it, onClose = voice::stop) }
 
     pinFor?.let { action ->
         PinDialog("Enter PIN", onDismiss = { pinFor = null }) { if (it == settings.pin) { pinFor = null; action(); true } else false }

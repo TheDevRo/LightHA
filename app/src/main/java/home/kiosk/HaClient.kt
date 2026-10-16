@@ -18,6 +18,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString.Companion.toByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -126,7 +127,7 @@ class HaClient(private val baseUrl: String, @Volatile private var token: String,
 
     /** A live HA subscription (render_template, weather/subscribe_forecast, todo/item/subscribe…). */
     inner class Subscription internal constructor(
-        val type: String, val fill: JSONObject.() -> Unit, val onEvent: (JSONObject) -> Unit,
+        val type: String, val fill: JSONObject.() -> Unit, val once: Boolean, val onEvent: (JSONObject) -> Unit,
     ) {
         @Volatile internal var id = -1
 
@@ -139,9 +140,12 @@ class HaClient(private val baseUrl: String, @Volatile private var token: String,
 
     private val subscriptions = java.util.concurrent.CopyOnWriteArrayList<Subscription>()
 
-    /** Subscribes now (if connected) and again after every reconnect; [onEvent] gets each message's `event`. */
-    fun subscribe(type: String, fill: JSONObject.() -> Unit = {}, onEvent: (JSONObject) -> Unit): Subscription =
-        Subscription(type, fill, onEvent).also {
+    /**
+     * Subscribes now (if connected) and again after every reconnect; [onEvent] gets each message's `event`.
+     * [once] is for one-off runs (assist_pipeline/run): dropped on disconnect instead of being re-sent.
+     */
+    fun subscribe(type: String, fill: JSONObject.() -> Unit = {}, once: Boolean = false, onEvent: (JSONObject) -> Unit): Subscription =
+        Subscription(type, fill, once, onEvent).also {
             subscriptions += it
             if (_status.value == Status.CONNECTED) it.id = send(type, fill)
         }
@@ -169,6 +173,9 @@ class HaClient(private val baseUrl: String, @Volatile private var token: String,
     }
 
     class HttpException(val code: Int, message: String) : IOException(message)
+
+    /** A binary frame, e.g. microphone audio for assist_pipeline/run. */
+    fun sendBinary(bytes: ByteArray) = ws?.send(bytes.toByteString()) ?: false
 
     private fun send(type: String, fill: JSONObject.() -> Unit = {}): Int {
         val id = nextId.getAndIncrement()
@@ -239,6 +246,7 @@ class HaClient(private val baseUrl: String, @Volatile private var token: String,
         if (stopped) return
         _status.value = Status.CONNECTING
         pending.values.forEach { it.completeExceptionally(IOException("disconnected")) }
+        subscriptions.removeAll(subscriptions.filter { it.once }.toSet()) // COW list: no iterator remove, no removeIf on API 21
         val wait = backoffMs
         backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
         scope.launch { delay(wait); start() }
