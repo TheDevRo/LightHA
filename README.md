@@ -18,6 +18,7 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
 - **Multiple views.** Each view gets a tab, and you can swipe between them. Subviews and `navigate` actions work, the app reopens on the last view, and it can return to the first view after a set idle time.
 - **Universal remote card**, drawn natively. It honours your `rows` and `custom_actions`, supports hold-to-repeat, has a swipe touchpad and text entry, and sends keys the right way per platform: Fire TV through `androidtv.adb_command`, Apple TV and Android TV through `remote.send_command`.
 - **On-tablet settings** (gear icon): HA address and token, dashboard, which views show (all are on by default), return-to-first-view timer, keep screen on, fullscreen, brightness, tablet editing on/off, and an optional PIN for settings and editing.
+- **View backgrounds:** each view's HA background image, at its opacity.
 - **Kiosk mode** (Settings → Kiosk):
   - **Use as home screen:** the Home button and reboots open the dashboard.
   - **Start after reboot:** for when you don't use home-screen mode.
@@ -57,8 +58,14 @@ The app opens the dashboard with the URL path `wall-home`. To pick another one, 
 |---|---|
 | `heading`, `vertical-stack`, `horizontal-stack`, `grid` | layout |
 | `entities`, `entity`, `tile`, `button`, `light`, `sensor`, `thermostat` | entity rows |
-| Mushroom: light, entity, template, climate, number, fan, cover, lock | entity rows (templates in names aren't rendered yet) |
+| Mushroom: light, entity, template, climate, number, fan, cover, lock | entity rows; template `primary` / `secondary` / `color` are rendered live by HA |
 | `media-control`, `custom:yet-another-media-player`, Mushroom media | media card |
+| `custom:weather-forecast-card`, `weather-forecast` | current conditions + hourly/daily forecast |
+| `custom:calendar-card-pro`, `calendar` | event list grouped by day |
+| `custom:mini-graph-card`, `sensor` with `graph:` | sparkline from HA long-term statistics |
+| `picture-entity`, `picture-glance`, `custom:advanced-camera-card` | refreshing snapshots, PTZ arrows |
+| `todo-list` | live list: check off and add items |
+| `markdown` | rendered text, templates included |
 | `clock` | clock |
 | `custom:universal-remote-card` | remote |
 | `custom:bubble-card` pop-ups | bottom sheet, opened by a `#hash` action |
@@ -69,7 +76,7 @@ Each entity row shows a control that fits the domain: a switch for lights, switc
 
 ## Not yet
 
-Weather, calendar, camera/picture, graph and map cards · Jinja templates in card text · HA login flow and mDNS discovery (setup uses a token for now) · drag-and-drop editing · speaker grouping and media browsing.
+Map card (needs internet map tiles) · live camera video · `card_mod` styling ([#11](https://github.com/TheDevRo/LightHA/issues/11)) · calendar views other than the list ([#10](https://github.com/TheDevRo/LightHA/issues/10)) · HA login flow and mDNS discovery (setup uses a token for now) · drag-and-drop editing · speaker grouping and media browsing.
 
 ## Project layout
 
