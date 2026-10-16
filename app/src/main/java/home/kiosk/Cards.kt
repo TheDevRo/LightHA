@@ -114,6 +114,8 @@ private fun CardBody(card: JSONObject, ctx: CardContext, top: Boolean) {
         }
         type == "clock" -> Clock()
         isMediaCard(card) -> MediaCard(card, ctx)
+        isTodoCard(card) -> TodoCard(card, ctx)
+        isMarkdownCard(card) -> MarkdownCard(card, ctx)
         isRemoteCard(card) -> RemoteCard(card, ctx)
         isPopup(card) -> if (ctx.editing) Placeholder("Pop-up · ${popupTitle(card)}", top)
         type in ENTITY_CARDS && card.has("entity") -> Surface(top) { EntityCard(card, ctx) }
