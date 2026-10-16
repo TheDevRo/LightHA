@@ -81,6 +81,9 @@ class Lovelace(private val ha: HaClient, private val scope: CoroutineScope, priv
 
 fun JSONArray.objects(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
 
+/** Like optString, but JSON null gives [default]: Android's optString returns the text "null", and HA sends nulls. */
+fun JSONObject.text(key: String, default: String = ""): String = if (isNull(key)) default else optString(key, default)
+
 fun viewsOf(config: JSONObject): List<JSONObject> = config.optJSONArray("views")?.objects().orEmpty()
 
 /** Stable id for a view: its URL path, else its position. Used for show/hide and "last view". */
