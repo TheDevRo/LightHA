@@ -7,6 +7,8 @@ import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -85,23 +87,52 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
             Group("Home Assistant") {
                 var url by remember { mutableStateOf(settings.haUrl) }
                 var token by remember { mutableStateOf(settings.haToken) }
+                // Fresh installs default to signing in with an account; tablets already on a token stay on it.
+                var useAccount by remember { mutableStateOf(settings.haToken.isEmpty()) }
+                val scope = rememberCoroutineScope()
                 Text(
                     when (status) {
                         Status.CONNECTED -> "Connected" + (haVersion?.let { " · HA $it" } ?: "")
                         Status.CONNECTING -> "Connecting…"
-                        Status.AUTH_FAILED -> "Token rejected"
-                        Status.NOT_CONFIGURED -> "Enter your Home Assistant address and a long-lived access token (Profile → Security in HA)."
+                        Status.AUTH_FAILED -> if (settings.haRefresh.isNotEmpty()) "Signed out in Home Assistant. Sign in again." else "Token rejected"
+                        Status.NOT_CONFIGURED -> "Enter your Home Assistant address, then sign in."
                     },
                     color = if (status == Status.CONNECTED) Color(0xFF81C784) else Color(0xFFE57373), fontSize = 14.sp,
                 )
                 OutlinedTextField(url, { url = it }, label = { Text("Server URL") }, placeholder = { Text("http://homeassistant.local:8123") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-                OutlinedTextField(token, { token = it }, label = { Text("Long-lived access token") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                    visualTransformation = PasswordVisualTransformation())
-                Button(
-                    enabled = url.isNotBlank() && token.isNotBlank(),
-                    onClick = { settings.haUrl = url.trim(); settings.haToken = token.trim(); onReconnect() },
-                ) { Text(if (url == settings.haUrl && token == settings.haToken) "Reconnect" else "Save & reconnect") }
+                Choices(listOf(1 to "Account", 0 to "Long-lived token"), if (useAccount) 1 else 0) { useAccount = it == 1 }
+                /** Drop the account login (and remove it from the user's HA profile) when switching away from it. */
+                suspend fun forgetAccount() {
+                    if (settings.haRefresh.isNotEmpty()) HaAuth.revoke(settings.haUrl, settings.haRefresh)
+                    settings.haRefresh = ""
+                    settings.haUser = ""
+                }
+                if (useAccount) {
+                    if (settings.haRefresh.isNotEmpty() && url.trim() == settings.haUrl && status != Status.AUTH_FAILED) {
+                        Text("Signed in as ${settings.haUser}", color = Color.White, fontSize = 15.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Button(onClick = onReconnect) { Text("Reconnect") }
+                            OutlinedButton(onClick = { scope.launch { forgetAccount(); onReconnect() } }) { Text("Sign out") }
+                        }
+                    } else {
+                        SignInForm(url.trim()) { refresh, user ->
+                            scope.launch {
+                                forgetAccount()
+                                settings.haUrl = url.trim(); settings.haRefresh = refresh; settings.haUser = user; settings.haToken = ""
+                                onReconnect()
+                            }
+                        }
+                    }
+                } else {
+                    OutlinedTextField(token, { token = it }, label = { Text("Long-lived access token") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = PasswordVisualTransformation())
+                    Text("Profile → Security → Long-lived access tokens in Home Assistant.", color = TextDim, fontSize = 13.sp)
+                    Button(
+                        enabled = url.isNotBlank() && token.isNotBlank(),
+                        onClick = { scope.launch { forgetAccount(); settings.haUrl = url.trim(); settings.haToken = token.trim(); onReconnect() } },
+                    ) { Text(if (url == settings.haUrl && token == settings.haToken) "Reconnect" else "Save & reconnect") }
+                }
             }
 
             if (dashboards.isNotEmpty()) Group("Dashboard") {
@@ -269,3 +300,47 @@ private fun Choices(options: List<Pair<Int, String>>, selected: Int, pick: (Int)
         }
     }
 }
+
+/** Username + password, then a 2-factor code if the account has one. [onSignedIn] gets the refresh token. */
+@Composable
+private fun SignInForm(url: String, onSignedIn: (refresh: String, user: String) -> Unit) {
+    var user by remember { mutableStateOf("") }
+    var pass by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var mfa by remember { mutableStateOf<HaAuth.Step?>(null) } // set while HA waits for the 2-factor code
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    if (mfa == null) {
+        OutlinedTextField(user, { user = it }, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(pass, { pass = it }, label = { Text("Password") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
+    } else {
+        Text("Enter the code from your authenticator app.", color = Color.White, fontSize = 14.sp)
+        OutlinedTextField(code, { code = it }, label = { Text("Code") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+    }
+    error?.let { Text(it, color = Color(0xFFE57373), fontSize = 14.sp) }
+    Button(
+        enabled = !busy && url.isNotBlank() && (if (mfa == null) user.isNotBlank() && pass.isNotEmpty() else code.isNotBlank()),
+        onClick = {
+            busy = true; error = null
+            scope.launch {
+                try {
+                    val step = mfa?.let { HaAuth.answer(url, it.flowId, mapOf("code" to code.trim())) }
+                        ?: HaAuth.begin(url).let { HaAuth.answer(url, it.flowId, mapOf("username" to user.trim(), "password" to pass)) }
+                    when {
+                        step.code != null -> { pass = ""; onSignedIn(HaAuth.exchange(url, step.code).refresh, user.trim()) }
+                        step.error != null -> { error = step.error; if (step.stepId != "mfa") mfa = null; code = "" }
+                        step.stepId == "mfa" -> mfa = step
+                        else -> { error = "This account's sign-in step (${step.stepId}) isn't supported yet"; mfa = null }
+                    }
+                } catch (e: Exception) {
+                    error = "Couldn't reach Home Assistant: ${e.message}"
+                } finally { busy = false }
+            }
+        },
+    ) { Text(if (busy) "Signing in…" else "Sign in") }
+}
+

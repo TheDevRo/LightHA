@@ -10,6 +10,10 @@ import kotlin.reflect.KProperty
 class Settings(private val prefs: SharedPreferences) {
     var haUrl by string("ha_url", BuildConfig.HA_URL)
     var haToken by string("ha_token", BuildConfig.HA_TOKEN)
+    /** Set when signed in with an HA account instead of a long-lived token; traded for access tokens as needed. */
+    var haRefresh by string("ha_refresh", "")
+    /** Who's signed in, for display. */
+    var haUser by string("ha_user", "")
     var keepScreenOn by bool("keep_screen_on", true)
     var fullscreen by bool("fullscreen", true)
     /** Window brightness 0.05..1, or -1 to follow the system. */
