@@ -33,4 +33,28 @@ class CalendarTest {
             TimeZone.setDefault(tz)
         }
     }
+
+    @Test fun monthViewDetection() {
+        fun c(json: String) = org.json.JSONObject(json)
+        org.junit.Assert.assertTrue(isMonthView(c("""{"type":"calendar","initial_view":"dayGridMonth"}""")))
+        org.junit.Assert.assertTrue(isMonthView(c("""{"type":"calendar"}"""))) // HA's default view
+        org.junit.Assert.assertFalse(isMonthView(c("""{"type":"calendar","initial_view":"listWeek"}""")))
+        org.junit.Assert.assertTrue(isMonthView(c("""{"type":"custom:atomic-calendar-revive","defaultMode":"Calendar"}""")))
+        org.junit.Assert.assertFalse(isMonthView(c("""{"type":"custom:calendar-card-pro"}""")))
+    }
+
+    @Test fun monthCellsPadToWholeWeeks() {
+        val oct2026 = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).parse("2026-10-15")!!
+        val sun = monthCells(oct2026, java.util.Calendar.SUNDAY)
+        org.junit.Assert.assertEquals(35, sun.size) // Oct 1 2026 is a Thursday: 4 blanks + 31 days
+        org.junit.Assert.assertEquals(4, sun.indexOfFirst { it != null })
+        org.junit.Assert.assertEquals(31, sun.count { it != null })
+        org.junit.Assert.assertEquals(3, monthCells(oct2026, java.util.Calendar.MONDAY).indexOfFirst { it != null })
+    }
+
+    @Test fun cssSizes() {
+        org.junit.Assert.assertEquals(28f, cssSp("28px", 15f))
+        org.junit.Assert.assertEquals(15f, cssSp("", 15f))
+    }
 }
+
