@@ -157,13 +157,18 @@ class HaClient(private val baseUrl: String, @Volatile private var token: String,
         }
     }
 
-    /** Authenticated REST POST (e.g. /api/states to publish the tablet's own sensors). */
-    suspend fun postJson(path: String, body: JSONObject) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    /** Authenticated REST POST (mobile_app registration and webhooks). Returns the response body. */
+    suspend fun postJson(path: String, body: JSONObject): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         ensureToken()
         val req = Request.Builder().url(baseUrl.trimEnd('/') + path).header("Authorization", "Bearer $token")
             .post(body.toString().toRequestBody("application/json".toMediaType())).build()
-        http.newCall(req).execute().use { r -> if (!r.isSuccessful) throw IOException("POST $path: HTTP ${r.code}") }
+        http.newCall(req).execute().use { r ->
+            if (!r.isSuccessful) throw HttpException(r.code, "POST $path: HTTP ${r.code}")
+            r.body!!.string()
+        }
     }
+
+    class HttpException(val code: Int, message: String) : IOException(message)
 
     private fun send(type: String, fill: JSONObject.() -> Unit = {}): Int {
         val id = nextId.getAndIncrement()
