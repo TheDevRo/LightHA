@@ -41,7 +41,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONObject
 
-private val Amber = Color(0xFFFFB74D)
 
 fun isTodoCard(card: JSONObject) = card.optString("type") == "todo-list"
 fun isMarkdownCard(card: JSONObject) = card.optString("type") == "markdown"

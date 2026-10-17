@@ -18,7 +18,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,7 +26,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -155,15 +153,10 @@ object EnergyData {
 @Composable
 private fun rememberEnergy(): EnergyData.Today? {
     val ha = LocalHa.current
-    return produceState<EnergyData.Today?>(null, ha) {
-        while (true) { EnergyData.get(ha)?.let { value = it }; delay(5 * 60_000L) }
-    }.value
+    return polled(ha, 5 * 60_000L) { EnergyData.get(ha) }
 }
 
 private fun kwh(v: Double) = String.format(Locale.US, if (v >= 10) "%.0f kWh" else "%.1f kWh", v)
-
-@Composable
-private fun Heading(text: String) = Text(text, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
 
 @Composable
 private fun Dot(color: Color) = Box(Modifier.size(8.dp).clip(CircleShape).background(color))
@@ -201,14 +194,14 @@ fun EnergyCard(card: JSONObject, ctx: CardContext, top: Boolean) {
     val title = card.text("title")
     if (view == EnergyView.POWER) {
         if (s.power.isEmpty()) return
-        Surface(top) { Column { if (title.isNotEmpty()) Box(Modifier.padding(start = 16.dp, top = 8.dp)) { Heading(title) }; s.power.forEach { EntityCard(JSONObject().put("entity", it), ctx) } } }
+        Surface(top) { Column { CardTitle(title, Modifier.padding(start = 16.dp, top = 8.dp)); s.power.forEach { EntityCard(JSONObject().put("entity", it), ctx) } } }
         return
     }
     Surface(top) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             when (view) {
                 EnergyView.USAGE -> {
-                    Heading(title.ifEmpty { "Energy usage" })
+                    CardTitle(title.ifEmpty { "Energy usage" })
                     val series = listOf(s.gridIn to GridColor, s.solar to SolarColor, s.batteryOut to BatteryColor, s.gridOut to ExportColor).filter { it.first.isNotEmpty() }
                     Legend(series.map { (ids, c) -> c to (when (c) { GridColor -> "Grid"; SolarColor -> "Solar"; BatteryColor -> "Battery"; else -> "Returned" } + " " + kwh(ids.sumOf { data.totals[it] ?: 0.0 })) })
                     HourBars(series.map { energyHours(data.stats, it.first, data.midnight) }, series.map { it.second })
@@ -219,12 +212,12 @@ fun EnergyCard(card: JSONObject, ctx: CardContext, top: Boolean) {
                         "energy-gas-graph" -> Triple(s.gas, GasColor, "Gas consumption")
                         else -> Triple(s.water, WaterColor, "Water consumption")
                     }
-                    Heading(title.ifEmpty { name })
+                    CardTitle(title.ifEmpty { name })
                     if (ids.isEmpty()) Text("Not set up in the Energy dashboard", color = TextDim, fontSize = 13.sp)
                     else HourBars(listOf(energyHours(data.stats, ids, data.midnight)), listOf(color))
                 }
                 EnergyView.DEVICES -> {
-                    Heading(title.ifEmpty { "Individual devices" })
+                    CardTitle(title.ifEmpty { "Individual devices" })
                     val rows = s.devices.map { (id, name) -> (name.ifEmpty { ctx.states[id]?.name ?: id }) to (data.totals[id] ?: 0.0) }.sortedByDescending { it.second }
                     val top1 = rows.firstOrNull()?.second?.takeIf { it > 0 } ?: 1.0
                     if (rows.isEmpty()) Text("No devices in the Energy dashboard", color = TextDim, fontSize = 13.sp)
@@ -237,7 +230,7 @@ fun EnergyCard(card: JSONObject, ctx: CardContext, top: Boolean) {
                 }
                 EnergyView.FLOWS -> {
                     val water = type.startsWith("water")
-                    Heading(title.ifEmpty { if (water) "Water" else "Energy distribution" })
+                    CardTitle(title.ifEmpty { if (water) "Water" else "Energy distribution" })
                     val parts = if (water) {
                         s.water.map { (ctx.states[it]?.name ?: "Water") to (data.totals[it] ?: 0.0) } + s.waterDevices.map { (id, n) -> n.ifEmpty { ctx.states[id]?.name ?: id } to (data.totals[id] ?: 0.0) }
                     } else listOf("Grid" to f.gridIn, "Solar" to f.solar, "Battery" to f.batteryOut, "Returned" to f.gridOut, "Gas" to s.gas.sumOf { data.totals[it] ?: 0.0 })
@@ -251,7 +244,7 @@ fun EnergyCard(card: JSONObject, ctx: CardContext, top: Boolean) {
                     Legend(shown.mapIndexed { i, (n, v) -> colors[i % colors.size] to "$n ${if (water) num(v) else kwh(v)}" })
                 }
                 EnergyView.TABLE -> {
-                    Heading(title.ifEmpty { "Sources" })
+                    CardTitle(title.ifEmpty { "Sources" })
                     val rows = listOf("Grid" to f.gridIn, "Solar" to f.solar, "Battery out" to f.batteryOut, "Battery in" to f.batteryIn, "Returned to grid" to f.gridOut).filter { it.second > 0 || it.first == "Grid" }
                     rows.forEach { (n, v) ->
                         Row {

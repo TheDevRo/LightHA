@@ -57,7 +57,6 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.util.Date
 
-private val Amber = Color(0xFFFFB74D)
 
 /** Card types drawn as the media card (plus tiles pointing at a media_player). */
 val MEDIA_CARDS = setOf("media-control", "custom:yet-another-media-player", "custom:mushroom-media-player-card")

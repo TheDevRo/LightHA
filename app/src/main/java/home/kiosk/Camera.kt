@@ -28,7 +28,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -37,15 +36,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
 import org.json.JSONObject
 
-private val Amber = Color(0xFFFFB74D)
 
 fun isCameraCard(card: JSONObject) = when (card.optString("type")) {
     "picture-entity", "picture-glance" -> cameraIds(card).isNotEmpty()
@@ -84,12 +80,7 @@ fun CameraCard(card: JSONObject, ctx: CardContext) {
     val refresh = cameraRefreshMs(card)
 
     // Refreshes only while the card is on screen; keeps the last frame while the next one loads.
-    val frame = produceState<ImageBitmap?>(null, camId) {
-        while (true) {
-            snapshotUrl(base, picture, System.currentTimeMillis())?.let { url -> fetchImage(url, maxPx = 800)?.let { value = it } }
-            delay(refresh)
-        }
-    }.value
+    val frame = polled(camId, refresh) { snapshotUrl(base, picture, System.currentTimeMillis())?.let { fetchImage(it, maxPx = 800) } }
 
     // picture-entity overlays another entity's name/state (e.g. the nursery temperature over the Nanit camera).
     val labelEntity = card.optString("entity").takeIf { it.isNotEmpty() }?.let { ctx.states[it] } ?: ctx.states[camId]

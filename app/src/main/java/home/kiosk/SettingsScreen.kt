@@ -59,7 +59,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.json.JSONObject
 
-private val Amber = Color(0xFFFFB74D)
 
 /** Full-screen on-tablet settings. [onReconnect] restarts the HA connection after URL/token changes. */
 @Composable

@@ -20,7 +20,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,7 +35,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -44,15 +42,13 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
-/** Android optString turns JSON null into "null"; see the shared text() helper in #4. */
-private fun JSONObject.str(key: String) = if (isNull(key)) "" else optString(key)
 
 private val PALETTE = listOf(Color(0xFFFFB74D), Color(0xFF4CC9F0), Color(0xFF7AE582), Color(0xFFFF6F61), Color(0xFFBA68C8))
 
 /** mini-graph-card, or HA's sensor card with `graph:` set. A plain sensor card stays an entity row. */
 fun isGraphCard(card: JSONObject) = when (card.optString("type")) {
     "custom:mini-graph-card" -> true
-    "sensor" -> card.has("graph") && card.str("graph") != "none"
+    "sensor" -> card.has("graph") && card.text("graph") != "none"
     else -> false
 }
 
@@ -63,17 +59,17 @@ fun graphLines(card: JSONObject): List<GraphLine> {
     val raw = if (arr != null) (0 until arr.length()).map { arr.opt(it) } else listOf(card.optString("entity"))
     return raw.mapIndexedNotNull { i, x ->
         val o = x as? JSONObject
-        val id = o?.str("entity") ?: x?.toString() ?: return@mapIndexedNotNull null
+        val id = o?.text("entity") ?: x?.toString() ?: return@mapIndexedNotNull null
         if (id.isEmpty()) return@mapIndexedNotNull null
-        val color = (o?.str("color") ?: card.str("line_color")).takeIf { it.startsWith("#") }
+        val color = (o?.text("color") ?: card.text("line_color")).takeIf { it.startsWith("#") }
             ?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
-        GraphLine(id, o?.str("name")?.takeIf { it.isNotEmpty() }, color ?: PALETTE[i % PALETTE.size])
+        GraphLine(id, o?.text("name")?.takeIf { it.isNotEmpty() }, color ?: PALETTE[i % PALETTE.size])
     }
 }
 
 /** HA's minimal history rows ({s, lu}) → numeric (epoch ms, value) points; non-numeric states are skipped. */
 fun historyPoints(rows: List<JSONObject>): List<Pair<Long, Double>> = rows.mapNotNull { r ->
-    val v = r.str("s").toDoubleOrNull() ?: return@mapNotNull null
+    val v = r.text("s").toDoubleOrNull() ?: return@mapNotNull null
     val t = r.optDouble("lu").takeUnless { it.isNaN() } ?: return@mapNotNull null
     (t * 1000).toLong() to v
 }
@@ -127,32 +123,26 @@ fun GraphCard(card: JSONObject, ctx: CardContext) {
     // a day of energy sensors), which matters because a big reply blocks the socket while it's parsed.
     // Raw history only for sensors without statistics (no state_class).
     val period = if (perHour > 1) "5minute" else "hour"
-    val history = produceState<Map<String, List<Pair<Long, Double>>>?>(null, lines.map { it.id }, hours) {
-        while (true) {
-            val end = System.currentTimeMillis()
-            val from = isoUtc(end - (hours * 3_600_000).toLong())
-            value = runCatching {
-                val ids = lines.map { it.id }
-                val stats = ha.request("recorder/statistics_during_period") {
-                    put("start_time", from); put("statistic_ids", org.json.JSONArray(ids))
-                    put("period", period); put("types", org.json.JSONArray(listOf("mean", "state")))
-                } as? JSONObject ?: JSONObject()
-                val got = withContext(Dispatchers.Default) {
-                    ids.associateWith { statisticsPoints(stats.optJSONArray(it)?.objects().orEmpty()) }.filterValues { it.isNotEmpty() }
-                }
-                val missing = ids - got.keys
-                val raw = if (missing.isEmpty()) emptyMap() else {
-                    val r = ha.request("history/history_during_period") {
-                        put("start_time", from); put("entity_ids", org.json.JSONArray(missing))
-                        put("minimal_response", true); put("no_attributes", true)
-                    } as JSONObject
-                    withContext(Dispatchers.Default) { missing.associateWith { historyPoints(r.optJSONArray(it)?.objects().orEmpty()) } }
-                }
-                got + raw
-            }.getOrNull() ?: value
-            delay(10 * 60_000L)
+    val history = polled(lines.map { it.id } to hours, 10 * 60_000L) {
+        val from = isoUtc(System.currentTimeMillis() - (hours * 3_600_000).toLong())
+        val ids = lines.map { it.id }
+        val stats = ha.request("recorder/statistics_during_period") {
+            put("start_time", from); put("statistic_ids", org.json.JSONArray(ids))
+            put("period", period); put("types", org.json.JSONArray(listOf("mean", "state")))
+        } as? JSONObject ?: JSONObject()
+        val got = withContext(Dispatchers.Default) {
+            ids.associateWith { statisticsPoints(stats.optJSONArray(it)?.objects().orEmpty()) }.filterValues { it.isNotEmpty() }
         }
-    }.value
+        val missing = ids - got.keys
+        val raw = if (missing.isEmpty()) emptyMap() else {
+            val r = ha.request("history/history_during_period") {
+                put("start_time", from); put("entity_ids", org.json.JSONArray(missing))
+                put("minimal_response", true); put("no_attributes", true)
+            } as JSONObject
+            withContext(Dispatchers.Default) { missing.associateWith { historyPoints(r.optJSONArray(it)?.objects().orEmpty()) } }
+        }
+        got + raw
+    }
 
     val now = System.currentTimeMillis()
     val start = now - (hours * 3_600_000).toLong()
@@ -161,7 +151,7 @@ fun GraphCard(card: JSONObject, ctx: CardContext) {
         bucketize(history?.get(l.id).orEmpty() + live, start, now, buckets)
     }
     val first = ctx.states[lines[0].id]
-    val title = card.str("name").ifEmpty { lines[0].name ?: first?.name ?: lines[0].id }
+    val title = card.text("name").ifEmpty { lines[0].name ?: first?.name ?: lines[0].id }
     val tap = ctx.runner(tapAct(card, lines[0].id), lines[0].id) ?: { ctx.openMoreInfo(lines[0].id) }
 
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(CardBg).clickable(onClick = tap).padding(20.dp)) {
@@ -215,7 +205,7 @@ data class Segment(val start: Long, val end: Long, val state: String)
 
 /** Minimal history rows ({s, lu}) → contiguous state segments clipped to [start, end]. */
 fun timeline(rows: List<JSONObject>, start: Long, end: Long): List<Segment> {
-    val pts = rows.mapNotNull { r -> r.optDouble("lu").takeUnless { it.isNaN() }?.let { (it * 1000).toLong().coerceAtLeast(start) to r.str("s") } }
+    val pts = rows.mapNotNull { r -> r.optDouble("lu").takeUnless { it.isNaN() }?.let { (it * 1000).toLong().coerceAtLeast(start) to r.text("s") } }
     return pts.mapIndexedNotNull { i, (t, st) ->
         val next = pts.getOrNull(i + 1)?.first ?: end
         if (next <= t || t >= end) null else Segment(t, next.coerceAtMost(end), st)
@@ -232,21 +222,13 @@ fun timelineColor(state: String): Color = when (state) {
     else -> TIMELINE_PALETTE[Math.floorMod(state.hashCode(), TIMELINE_PALETTE.size)]
 }
 
-@Composable
-private fun <T> polled(key: Any, everyMs: Long, fetch: suspend () -> T?): T? = produceState<T?>(null, key) {
-    while (true) {
-        runCatching { fetch() }.getOrNull()?.let { value = it }
-        delay(everyMs)
-    }
-}.value
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HistoryGraphCard(card: JSONObject, ctx: CardContext) {
     val ha = LocalHa.current
     val rows = entityRows(card)
     if (rows.isEmpty()) return
-    val ids = rows.map { it.str("entity") }
+    val ids = rows.map { it.text("entity") }
     val hours = card.optDouble("hours_to_show", 24.0).coerceIn(1.0, 24.0 * 7)
     val history = polled(ids to hours, 5 * 60_000L) {
         val r = ha.request("history/history_during_period") {
@@ -261,7 +243,7 @@ fun HistoryGraphCard(card: JSONObject, ctx: CardContext) {
     val (lineIds, barIds) = ids.partition { ctx.states[it]?.attributes?.text("unit_of_measurement").orEmpty().isNotEmpty() }
 
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        card.str("title").takeIf { it.isNotEmpty() }?.let { Text(it, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
+        CardTitle(card.text("title"))
         if (lineIds.isNotEmpty()) {
             val colors = lineIds.indices.map { PALETTE[it % PALETTE.size] }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -270,7 +252,7 @@ fun HistoryGraphCard(card: JSONObject, ctx: CardContext) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { ctx.openMoreInfo(id) }) {
                         Box(Modifier.size(8.dp).clip(CircleShape).background(colors[i]))
                         Spacer(Modifier.width(6.dp))
-                        Text("${rows[ids.indexOf(id)].str("name").ifEmpty { e?.name ?: id }} ${e?.let(::stateText).orEmpty()}", color = Color.White, fontSize = 13.sp)
+                        Text("${rows[ids.indexOf(id)].text("name").ifEmpty { e?.name ?: id }} ${e?.let(::stateText).orEmpty()}", color = Color.White, fontSize = 13.sp)
                     }
                 }
             }
@@ -286,7 +268,7 @@ fun HistoryGraphCard(card: JSONObject, ctx: CardContext) {
             val segs = timeline(history?.get(id).orEmpty(), start, now)
             Column(Modifier.clickable { ctx.openMoreInfo(id) }) {
                 Row {
-                    Text(rows[ids.indexOf(id)].str("name").ifEmpty { e?.name ?: id }, color = TextDim, fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(rows[ids.indexOf(id)].text("name").ifEmpty { e?.name ?: id }, color = TextDim, fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     e?.let { Text(stateText(it).ifEmpty { it.state }, color = Color.White, fontSize = 12.sp, maxLines = 1) }
                 }
                 Canvas(Modifier.fillMaxWidth().height(14.dp).clip(RoundedCornerShape(4.dp)).background(CardBg)) {
@@ -318,9 +300,9 @@ fun StatisticsGraphCard(card: JSONObject, ctx: CardContext) {
     val ha = LocalHa.current
     val rows = entityRows(card)
     if (rows.isEmpty()) return
-    val ids = rows.map { it.str("entity") }
+    val ids = rows.map { it.text("entity") }
     val days = card.optDouble("days_to_show", 30.0).coerceIn(1.0, 365.0)
-    val period = card.str("period").takeIf { it in setOf("5minute", "hour", "day", "week", "month") } ?: if (days <= 7) "hour" else "day"
+    val period = card.text("period").takeIf { it in setOf("5minute", "hour", "day", "week", "month") } ?: if (days <= 7) "hour" else "day"
     val stats = polled(ids to days, 15 * 60_000L) {
         ha.request("recorder/statistics_during_period") {
             put("start_time", isoUtc(System.currentTimeMillis() - (days * 86_400_000).toLong())); put("statistic_ids", org.json.JSONArray(ids))
@@ -336,16 +318,16 @@ fun StatisticsGraphCard(card: JSONObject, ctx: CardContext) {
         val type = pickStatType(card, r)
         type to bucketize(statisticsPoints(r, type), start, now, buckets)
     }
-    val bars = card.str("chart_type") == "bar" || (card.str("chart_type").isEmpty() && series.all { it.first == "change" })
+    val bars = card.text("chart_type") == "bar" || (card.text("chart_type").isEmpty() && series.all { it.first == "change" })
 
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        card.str("title").takeIf { it.isNotEmpty() }?.let { Text(it, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
+        CardTitle(card.text("title"))
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             ids.forEachIndexed { i, id ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(8.dp).clip(CircleShape).background(colors[i]))
                     Spacer(Modifier.width(6.dp))
-                    Text(rows[i].str("name").ifEmpty { ctx.states[id]?.name ?: id }, color = Color.White, fontSize = 13.sp, maxLines = 1)
+                    Text(rows[i].text("name").ifEmpty { ctx.states[id]?.name ?: id }, color = Color.White, fontSize = 13.sp, maxLines = 1)
                 }
             }
         }
@@ -385,11 +367,11 @@ fun distribution(values: List<Double?>): List<Float> {
 @Composable
 fun DistributionCard(card: JSONObject, ctx: CardContext) {
     val rows = entityRows(card)
-    val es = rows.map { ctx.states[it.str("entity")] }
+    val es = rows.map { ctx.states[it.text("entity")] }
     val shares = distribution(es.map { it?.state?.toDoubleOrNull() })
-    val colors = rows.mapIndexed { i, r -> mushroomColor(r.str("color")) ?: PALETTE[i % PALETTE.size] }
+    val colors = rows.mapIndexed { i, r -> mushroomColor(r.text("color")) ?: PALETTE[i % PALETTE.size] }
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        card.str("title").takeIf { it.isNotEmpty() }?.let { Text(it, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
+        CardTitle(card.text("title"))
         Row(Modifier.fillMaxWidth().height(14.dp).clip(RoundedCornerShape(7.dp)).background(Chip)) {
             shares.forEachIndexed { i, f -> if (f > 0f) Box(Modifier.weight(f).fillMaxHeight().background(colors[i])) }
         }
@@ -399,7 +381,7 @@ fun DistributionCard(card: JSONObject, ctx: CardContext) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { ctx.openMoreInfo(e.id) }) {
                     Box(Modifier.size(8.dp).clip(CircleShape).background(colors[i]))
                     Spacer(Modifier.width(6.dp))
-                    Text("${r.str("name").ifEmpty { e.name }} ${stateText(e)}", color = Color.White, fontSize = 13.sp)
+                    Text("${r.text("name").ifEmpty { e.name }} ${stateText(e)}", color = Color.White, fontSize = 13.sp)
                 }
             }
         }

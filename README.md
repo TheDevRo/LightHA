@@ -62,29 +62,43 @@ The app opens the dashboard with the URL path `wall-home`. To pick another one, 
 
 ## Supported cards
 
+Every card type built into Home Assistant (all 70 in HA 2026.10) is drawn natively; a unit test checks the list against HA's frontend. Highlights:
+
 | HA card | Drawn as |
 |---|---|
-| `heading`, `vertical-stack`, `horizontal-stack`, `grid` | layout |
-| `entities`, `entity`, `tile`, `button`, `light`, `sensor`, `thermostat` | entity rows |
-| Mushroom: light, entity, template, climate, number, fan, cover, lock | entity rows; template `primary` / `secondary` / `color` are rendered live by HA |
-| `media-control`, `custom:yet-another-media-player`, Mushroom media | media card |
-| `custom:weather-forecast-card`, `weather-forecast` | current conditions + hourly/daily forecast |
-| `custom:calendar-card-pro`, `calendar`, `custom:atomic-calendar-revive` | event list grouped by day with per-day weather and font sizes; month grid for `dayGridMonth` and atomic Calendar mode |
-| `custom:mini-graph-card`, `sensor` with `graph:` | sparkline from HA long-term statistics |
-| `picture-entity`, `picture-glance`, `custom:advanced-camera-card` | refreshing snapshots, PTZ arrows |
-| `todo-list` | live list: check off and add items |
-| `markdown` | rendered text, templates included; common `card_mod` styles (font size/weight, alignment, colors, corner radius) |
-| `clock` | clock |
+| `heading`, stacks, `grid`, `conditional`, `entity-filter` | layout and filtering, including legacy `state_filter` and conditions |
+| `entities`, `entity`, `tile`, `button`, `light`, `sensor`, `thermostat`, `glance`, `toggle-group`, `shortcut`, `alert` | entity rows, glance cells, toggle chips |
+| `media-control` | media card |
+| `weather-forecast`, `calendar`, `todo-list`, `shopping-list`, `markdown`, `clock` | forecast, event list or month grid, live to-do list, rendered text |
+| `history-graph`, `statistics-graph`, `statistic`, `gauge`, `distribution` | lines for numbers, coloured timelines for states, bars, gauges |
+| `picture`, `picture-entity`, `picture-glance`, `picture-elements` | images and camera snapshots with overlays and positioned elements |
+| `logbook`, `area`, `home-summary`, `updates`, `alarm-panel`, `humidifier`, `plant-status` | lists, area summary, keypad and controls |
+| Energy, water and power cards | today's figures from the Energy dashboard settings |
+| `map` | people and places as rows (map tiles need internet) |
+| `iframe` | a tile that opens the page full screen |
+| `repairs`, `discovered-devices` | admin logins only; hidden otherwise |
+
+Custom cards:
+
+| Card | Drawn as |
+|---|---|
+| Mushroom: light, entity, template, climate, number, fan, cover, lock, media, vacuum, alarm, select, humidifier, person, update; template badges | entity rows and badges; templates rendered live by HA |
+| `custom:yet-another-media-player` | media card |
+| `custom:weather-forecast-card`, `custom:calendar-card-pro`, `custom:atomic-calendar-revive` | forecast, calendar |
+| `custom:mini-graph-card` | sparkline from long-term statistics |
+| `custom:advanced-camera-card` | refreshing snapshots, PTZ arrows |
 | `custom:universal-remote-card` | remote |
 | `custom:bubble-card` pop-ups | bottom sheet, opened by a `#hash` action |
+| `custom:auto-entities` | include/exclude rules and sort, handed to its inner card |
+| `custom:uptime-card`, `custom:flex-table-card`, `custom:upcoming-media-card`, `custom:threedy-card`, `custom:power-flow-card-plus` | uptime bar, table, upcoming list, printer status, power rows |
 
-Unsupported cards are skipped. In edit mode they show as outlined placeholders so you can see what's missing.
+Any other card that names `entity` or `entities` is drawn as entity rows. Cards without entities are skipped; in edit mode they show as outlined placeholders.
 
 Each entity row shows a control that fits the domain: a switch for lights, switches, fans and `input_boolean`; −/+ for thermostats and numbers; play/pause for media; plus covers, locks (asks before locking/unlocking), scenes, scripts, buttons and sensors (timestamps and weather are shown in plain words).
 
 ## Not yet
 
-Map card (needs internet map tiles) · live camera video · `card_mod` on cards other than markdown · calendar weather per event · mDNS discovery · drag-and-drop editing · speaker grouping and media browsing.
+Live camera video · map tiles · cards built from JavaScript templates (`button-card`, `config-template-card`) · `card_mod` on cards other than markdown · mDNS discovery · drag-and-drop editing · speaker grouping and media browsing.
 
 ## Project layout
 
@@ -93,7 +107,9 @@ Map card (needs internet map tiles) · live camera video · `card_mod` on cards 
 | `HaClient.kt` | WebSocket API: auth, live states, service calls, requests, `lovelace_updated` |
 | `Lovelace.kt` | dashboard load/save/copy, visibility, action parsing, layout packing, edit operations |
 | `Kinds.kt` | maps an entity to its kind, default tap, state text and steppers |
-| `Cards.kt`, `Tiles.kt`, `Media.kt` | card and row rendering |
+| `Cards.kt`, `Tiles.kt`, `Media.kt` | card dispatch (`rendererOf`), entity rows, media card |
+| `NativeCards.kt`, `Graph.kt`, `Energy.kt` | HA's built-in cards |
+| `CustomCards.kt` | custom (HACS) cards beyond Mushroom |
 | `MoreInfo.kt` | more-info sheet |
 | `Editor.kt` | pencil sheet, QR code, edit toolbar, entity picker |
 | `Kiosk.kt` | home-screen mode, start on boot, screensaver |
@@ -104,3 +120,5 @@ Map card (needs internet map tiles) · live camera video · `card_mod` on cards 
 | `WakeWord.kt`, `cpp/` | on-tablet wake word: JNI wrapper and the native microWakeWord engine (Apache-2.0, see `cpp/NOTICE`) |
 
 The pure logic is covered by JVM unit tests: `./gradlew testDebugUnitTest`.
+
+Debug builds can show a local test dashboard: push a Lovelace config as JSON to the app's `files/gallery.json` (`adb push … /data/local/tmp/` then `run-as home.kiosk cp …`) and set the dashboard to `gallery`. Keep the file out of git (`*.local.json` is ignored), since it holds your entity ids.

@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -33,7 +32,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -71,7 +69,6 @@ private val DAY_KEY get() = SimpleDateFormat("yyyyMMdd", Locale.US)
 
 data class CalEvent(val title: String, val start: Date, val end: Date?, val allDay: Boolean, val location: String, val color: Color)
 
-private val Amber = Color(0xFFFFB74D)
 private val PALETTE = listOf(Color(0xFFF0A030), Color(0xFF64B5F6), Color(0xFF81C784), Color(0xFFE57373), Color(0xFFBA68C8))
 
 /** One calendar's events from HA's REST `/api/calendars/<entity>`. All-day dates are local midnight. */
@@ -81,11 +78,9 @@ fun parseEvents(arr: JSONArray, color: Color): List<CalEvent> = arr.objects().ma
     val start = (if (allDay) localDate(s.getString("date")) else parseIso(s.optString("dateTime"))) ?: return@mapNotNull null
     val en = e.optJSONObject("end")
     val end = en?.let { if (it.has("date")) localDate(it.getString("date")) else parseIso(it.optString("dateTime")) }
-    CalEvent(e.str("summary").trim().ifEmpty { "(no title)" }, start, end, allDay, e.str("location").trim(), color)
+    CalEvent(e.text("summary").trim().ifEmpty { "(no title)" }, start, end, allDay, e.text("location").trim(), color)
 }
 
-/** Android's optString turns JSON null into the text "null"; HA sends null for empty fields. */
-private fun JSONObject.str(key: String) = if (isNull(key)) "" else optString(key)
 
 private fun localDate(s: String): Date? = runCatching { SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(s) }.getOrNull()
 
@@ -124,20 +119,17 @@ fun CalendarCard(card: JSONObject, ctx: CardContext) {
     // Refetch when any calendar's state flips (an event starting/ending) and every 5 minutes.
     val stamp = ids.joinToString { ctx.states[it]?.state.orEmpty() }
 
-    val events = produceState<List<CalEvent>?>(null, ids, stamp, days, month) {
-        while (true) {
-            val now = Date()
-            val cells = monthCells(now)
-            val start = if (month) cells.first { it != null }!! else Calendar.getInstance().apply { time = now; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0) }.time
-            val end = if (month) Date(cells.last { it != null }!!.time + 86_400_000L) else Date(start.time + days * 86_400_000L)
-            value = ids.flatMapIndexed { i, id ->
-                runCatching {
-                    parseEvents(ha.getJson("/api/calendars/$id?start=${isoUtc(start)}&end=${isoUtc(end)}") as JSONArray, if (i == 0 && accent != null) accent else PALETTE[i % PALETTE.size])
-                }.getOrDefault(emptyList())
-            }
-            delay(5 * 60_000L)
+    val events = polled(listOf(ids, stamp, days, month), 5 * 60_000L) {
+        val now = Date()
+        val cells = monthCells(now)
+        val start = if (month) cells.first { it != null }!! else Calendar.getInstance().apply { time = now; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0) }.time
+        val end = if (month) Date(cells.last { it != null }!!.time + 86_400_000L) else Date(start.time + days * 86_400_000L)
+        ids.flatMapIndexed { i, id ->
+            runCatching {
+                parseEvents(ha.getJson("/api/calendars/$id?start=${isoUtc(start)}&end=${isoUtc(end)}") as JSONArray, if (i == 0 && accent != null) accent else PALETTE[i % PALETTE.size])
+            }.getOrDefault(emptyList())
         }
-    }.value
+    }
 
     // calendar-card-pro's per-day weather (position "date", its default): icon + high/low beside each day.
     val weather = card.optJSONObject("weather")

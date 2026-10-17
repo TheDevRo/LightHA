@@ -185,7 +185,6 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
     }
 }
 
-private val Amber = Color(0xFFFFB74D)
 
 /** Bottom card for a voice turn; tapping anywhere cancels it. */
 @Composable

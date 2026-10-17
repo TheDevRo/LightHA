@@ -3,7 +3,6 @@ package home.kiosk
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -237,13 +236,17 @@ private fun CardBody(card: JSONObject, ctx: CardContext, top: Boolean) {
     }
 }
 
+/** A card's title line, styled the same on every card; nothing when [text] is empty. */
+@Composable
+fun CardTitle(text: String, modifier: Modifier = Modifier) {
+    if (text.isNotEmpty()) Text(text, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = modifier)
+}
+
 /** Optional title, then one entity row per config. Entities card and the fallback. */
 @Composable
 private fun Rows(card: JSONObject, rows: List<JSONObject>, ctx: CardContext) {
     Column {
-        card.text("title").takeIf { it.isNotEmpty() }?.let {
-            Text(it, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 16.dp, top = 8.dp))
-        }
+        CardTitle(card.text("title"), Modifier.padding(start = 16.dp, top = 8.dp))
         // A card-wide secondary_info (e.g. "last-changed") applies to rows that don't set their own.
         val info = card.text("secondary_info")
         rows.forEach { EntityCard(if (info.isNotEmpty() && !it.has("secondary_info")) JSONObject(it.toString()).put("secondary_info", info) else it, ctx) }

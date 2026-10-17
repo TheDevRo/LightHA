@@ -3,6 +3,7 @@ package home.kiosk
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.produceState
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 
 val LocalHa = compositionLocalOf<HaClient> { error("HaClient not provided") }
@@ -34,3 +35,15 @@ fun rememberTemplate(template: String?, entityId: String? = null): String? {
 /** render_template's event carries `result` (any JSON type) or `error`. */
 fun templateResult(event: JSONObject): String? =
     if (event.has("error")) null else event.opt("result")?.takeUnless { it == JSONObject.NULL }?.toString()?.trim()
+
+/**
+ * Runs [fetch] now and every [everyMs] while on screen, restarting when [key] changes.
+ * A failed or null fetch keeps the last good value, so a dropped request never blanks a card.
+ */
+@Composable
+fun <T> polled(key: Any?, everyMs: Long, fetch: suspend () -> T?): T? = produceState<T?>(null, key) {
+    while (true) {
+        runCatching { fetch() }.getOrNull()?.let { value = it }
+        delay(everyMs)
+    }
+}.value

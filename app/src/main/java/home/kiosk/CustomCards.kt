@@ -19,7 +19,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,7 +30,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -125,17 +123,12 @@ fun UptimeCard(card: JSONObject, ctx: CardContext) {
     val hours = (d?.optDouble("quantity", 1.0) ?: 1.0) * when (d?.text("unit")) { "minute" -> 1 / 60.0; "hour" -> 1.0; "week" -> 168.0; "month" -> 720.0; else -> 24.0 }
     // uptime-card's `ok` state defaults to "on" (binary sensors) and anything else is down.
     val okState = card.text("ok").ifEmpty { "on" }
-    val rows = produceState<List<JSONObject>?>(null, id, hours) {
-        while (true) {
-            runCatching {
-                (ha.request("history/history_during_period") {
-                    put("start_time", isoUtc(System.currentTimeMillis() - (hours * 3_600_000).toLong()))
-                    put("entity_ids", JSONArray(listOf(id))); put("minimal_response", true); put("no_attributes", true)
-                } as JSONObject).optJSONArray(id)?.objects().orEmpty()
-            }.getOrNull()?.let { value = it }
-            delay(card.optLong("update_interval", 300).coerceAtLeast(60) * 1000)
-        }
-    }.value
+    val rows = polled(id to hours, card.optLong("update_interval", 300).coerceAtLeast(60) * 1000) {
+        (ha.request("history/history_during_period") {
+            put("start_time", isoUtc(System.currentTimeMillis() - (hours * 3_600_000).toLong()))
+            put("entity_ids", JSONArray(listOf(id))); put("minimal_response", true); put("no_attributes", true)
+        } as JSONObject).optJSONArray(id)?.objects().orEmpty()
+    }
     val now = System.currentTimeMillis()
     val start = now - (hours * 3_600_000).toLong()
     val segs = timeline(rows.orEmpty(), start, now)
@@ -193,7 +186,7 @@ fun FlexTableCard(card: JSONObject, ctx: CardContext) {
     val rows = flexRows(card, ctx.states)
     val scroll = rememberScrollState()
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
-        card.text("title").takeIf { it.isNotEmpty() }?.let { Text(it, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 8.dp)) }
+        CardTitle(card.text("title"), Modifier.padding(bottom = 8.dp))
         Column(Modifier.horizontalScroll(scroll)) {
             Row { cols.forEach { Text(it.text("name"), color = TextDim, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(130.dp).padding(end = 8.dp, bottom = 4.dp)) } }
             rows.forEach { r ->
@@ -233,7 +226,7 @@ fun UpcomingMediaCard(card: JSONObject, ctx: CardContext) {
     val items = data.filter { !it.has("title_default") }.take(card.optInt("max", 10))
     val fanart = card.text("image_style") == "fanart"
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        card.text("title").takeIf { it.isNotEmpty() }?.let { Text(it, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
+        CardTitle(card.text("title"))
         if (items.isEmpty()) Text("Nothing upcoming", color = TextDim, fontSize = 13.sp)
         items.forEach { item ->
             val lines = upcomingLines(defaults, item)
@@ -261,7 +254,7 @@ fun ThreedyCard(card: JSONObject, ctx: CardContext) {
     val progress = entity("Progress")?.state?.toDoubleOrNull()
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(card.text("name").ifEmpty { "3D printer" }, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            CardTitle(card.text("name").ifEmpty { "3D printer" }, Modifier.weight(1f))
             ctx.states[card.text("light_entity")]?.let { l ->
                 RoundButton(entityIcon(l), bg = if (l.state == "on") entityAccent(l) else Chip, tint = if (l.state == "on") CardBg else Color.White) {
                     ctx.call(l.domain, "toggle", listOf(l.id), null)
@@ -313,7 +306,7 @@ fun powerFlowEntities(card: JSONObject): List<Pair<String, String>> {
 fun PowerFlowCard(card: JSONObject, ctx: CardContext) {
     val rows = powerFlowEntities(card).filter { ctx.states.containsKey(it.second) }
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        card.text("title").takeIf { it.isNotEmpty() }?.let { Text(it, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)) }
+        CardTitle(card.text("title"), Modifier.padding(start = 16.dp, bottom = 4.dp))
         rows.forEach { (label, id) -> EntityCard(JSONObject().put("entity", id).put("name", label), ctx) }
     }
 }
