@@ -76,7 +76,8 @@ private val INTERNAL_CARDS = setOf("starting", "error", "empty-state", "recovery
 enum class Renderer {
     HEADING, VERTICAL, HORIZONTAL, GRID, ENTITIES, CLOCK, CAMERA, MEDIA, TODO, MARKDOWN, GRAPH, CALENDAR, WEATHER, REMOTE,
     POPUP, ENTITY, BUTTON, GLANCE, CONDITIONAL, ENTITY_FILTER, SHORTCUT, ALERT, TOGGLE_GROUP, GAUGE, STATISTIC, PLANT,
-    HUMIDIFIER, ALARM, PICTURE, IFRAME, NOTHING,
+    HUMIDIFIER, ALARM, PICTURE, IFRAME, HISTORY, STATISTICS_GRAPH, DISTRIBUTION, LOGBOOK, MAP, AREA, PICTURE_ELEMENTS,
+    HOME_SUMMARY, UPDATES, ADMIN_LIST, NOTHING,
     /** Unknown card: its entities as rows, if it names any. */
     FALLBACK,
 }
@@ -103,6 +104,16 @@ fun rendererOf(card: JSONObject): Renderer {
         type == "alarm-panel" -> Renderer.ALARM
         type == "iframe" -> Renderer.IFRAME
         type == "shopping-list" -> Renderer.TODO
+        type == "history-graph" -> Renderer.HISTORY
+        type == "statistics-graph" -> Renderer.STATISTICS_GRAPH
+        type == "distribution" -> Renderer.DISTRIBUTION
+        type == "logbook" -> Renderer.LOGBOOK
+        type == "map" -> Renderer.MAP
+        type == "area" -> Renderer.AREA
+        type == "picture-elements" -> Renderer.PICTURE_ELEMENTS
+        type == "home-summary" -> Renderer.HOME_SUMMARY
+        type == "updates" -> Renderer.UPDATES
+        type == "repairs" || type == "discovered-devices" -> Renderer.ADMIN_LIST
         type in INTERNAL_CARDS -> Renderer.NOTHING
         isCameraCard(card) -> Renderer.CAMERA
         type == "picture" || type == "picture-entity" || type == "picture-glance" -> Renderer.PICTURE
@@ -185,6 +196,17 @@ private fun CardBody(card: JSONObject, ctx: CardContext, top: Boolean) {
         Renderer.ALARM -> Surface(top) { AlarmCard(card, ctx) }
         Renderer.PICTURE -> PictureCard(card, ctx)
         Renderer.IFRAME -> Surface(top) { IframeCard(card) }
+        Renderer.HISTORY -> Surface(top) { HistoryGraphCard(card, ctx) }
+        Renderer.STATISTICS_GRAPH -> Surface(top) { StatisticsGraphCard(card, ctx) }
+        Renderer.DISTRIBUTION -> Surface(top) { DistributionCard(card, ctx) }
+        Renderer.LOGBOOK -> Surface(top) { LogbookCard(card, ctx) }
+        // No map tiles: the wall tablets may have no internet, and a map library is heavy. People and places as rows.
+        Renderer.MAP -> Surface(top) { Rows(card, entityRows(card), ctx) }
+        Renderer.AREA -> Surface(top) { AreaCard(card, ctx) }
+        Renderer.PICTURE_ELEMENTS -> PictureElementsCard(card, ctx)
+        Renderer.HOME_SUMMARY -> Surface(top) { HomeSummaryCard(card, ctx) }
+        Renderer.UPDATES -> UpdatesCard(card, ctx, top)
+        Renderer.ADMIN_LIST -> AdminListCard(card, ctx, top)
         Renderer.NOTHING -> Unit
         Renderer.FALLBACK -> {
             val rows = entityRows(card)

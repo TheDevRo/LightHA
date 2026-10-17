@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -59,6 +60,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -137,7 +139,7 @@ fun ShortcutCard(card: JSONObject, ctx: CardContext) {
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(card.text("label").ifEmpty { "Shortcut" }, color = Color.White, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(card.text("label").ifEmpty { card.text("text") }.ifEmpty { "Shortcut" }, color = Color.White, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             card.text("description").takeIf { it.isNotEmpty() }?.let { Text(it, color = TextDim, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
         }
     }
@@ -466,3 +468,310 @@ fun IframeCard(card: JSONObject) {
     }
 }
 
+
+// ---- registries (areas, devices, entity → area), shared by area and home-summary cards ----
+
+data class Area(val id: String, val name: String, val picture: String, val temperature: String, val humidity: String)
+
+/** HA's area/device/entity registries, as the frontend loads them for every user. Cached 30 minutes. */
+object Registries {
+    class Snapshot(val areas: Map<String, Area>, val entityArea: Map<String, String>, val hidden: Set<String>)
+    private var cached: Snapshot? = null
+    private var at = 0L
+
+    suspend fun get(ha: HaClient): Snapshot? {
+        cached?.takeIf { System.currentTimeMillis() - at < 30 * 60_000L }?.let { return it }
+        return runCatching {
+            val areas = (ha.request("config/area_registry/list") as JSONArray).objects().associate {
+                it.text("area_id") to Area(it.text("area_id"), it.text("name"), it.text("picture"), it.text("temperature_entity_id"), it.text("humidity_entity_id"))
+            }
+            val deviceArea = (ha.request("config/device_registry/list") as JSONArray).objects()
+                .filter { it.text("area_id").isNotEmpty() }.associate { it.text("id") to it.text("area_id") }
+            val ents = ((ha.request("config/entity_registry/list_for_display") as JSONObject).optJSONArray("entities") ?: JSONArray()).objects()
+            val entityArea = ents.mapNotNull { e -> (e.text("ai").ifEmpty { deviceArea[e.text("di")].orEmpty() }).takeIf { it.isNotEmpty() }?.let { e.text("ei") to it } }.toMap()
+            Snapshot(areas, entityArea, ents.filter { it.optBoolean("hb") }.map { it.text("ei") }.toSet())
+        }.getOrNull()?.also { cached = it; at = System.currentTimeMillis() } ?: cached
+    }
+}
+
+@Composable
+private fun rememberRegistries(): Registries.Snapshot? {
+    val ha = LocalHa.current
+    return produceState<Registries.Snapshot?>(null, ha) { value = Registries.get(ha) }.value
+}
+
+// ---- area ----
+
+private val TOGGLE_DOMAINS = setOf("light", "switch", "fan")
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AreaCard(card: JSONObject, ctx: CardContext) {
+    val reg = rememberRegistries() ?: return
+    val area = reg.areas[card.text("area")] ?: return
+    val members = reg.entityArea.filterValues { it == area.id }.keys.filter { it !in reg.hidden }.mapNotNull { ctx.states[it] }
+    val excluded = card.optJSONArray("exclude_entities")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+    val shown = members.filter { it.id !in excluded }
+    val sensorClasses = card.optJSONArray("sensor_classes")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: listOf("temperature", "humidity")
+    // HA: the area's chosen sensor, else the average of the area's sensors of that class (same unit).
+    val sensors = sensorClasses.mapNotNull { cls ->
+        val preset = when (cls) { "temperature" -> area.temperature; "humidity" -> area.humidity; else -> "" }
+        ctx.states[preset]?.let { stateText(it) } ?: run {
+            val of = shown.filter { it.domain == "sensor" && it.attributes.text("device_class") == cls && it.state.toDoubleOrNull() != null }
+            val unit = of.firstOrNull()?.attributes?.text("unit_of_measurement") ?: return@run null
+            val vals = of.filter { it.attributes.text("unit_of_measurement") == unit }.map { it.state.toDouble() }
+            stateText(Entity("sensor.avg", vals.average().toString(), JSONObject().put("unit_of_measurement", unit)))
+        }
+    }
+    val alertClasses = card.optJSONArray("alert_classes")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: listOf("moisture", "motion")
+    val alerts = shown.filter { it.domain == "binary_sensor" && it.state == "on" && it.attributes.text("device_class") in alertClasses }
+    val nav = card.text("navigation_path")
+    val img = rememberImage(area.picture.takeIf { it.isNotEmpty() })
+    Column(Modifier.fillMaxWidth().clickable(enabled = nav.isNotEmpty()) { ctx.openView(nav) }) {
+        img?.let { Image(it, null, Modifier.fillMaxWidth().aspectRatio(16f / 9f), contentScale = ContentScale.Crop) }
+        Column(Modifier.padding(16.dp)) {
+            Text(card.text("name").ifEmpty { area.name }, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            val line = (sensors + alerts.map { "${it.name} ${stateText(it)}" }).joinToString(" · ")
+            if (line.isNotEmpty()) Text(line, color = if (alerts.isEmpty()) TextDim else Danger, fontSize = 13.sp)
+            val toggles = shown.filter { it.domain in TOGGLE_DOMAINS }
+            if (toggles.isNotEmpty()) FlowRow(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                toggles.forEach { e ->
+                    val on = e.state == "on"
+                    Icon(
+                        entityIcon(e), e.name, tint = if (on) CardBg else Color.White,
+                        modifier = Modifier.clip(CircleShape).background(if (on) entityAccent(e) else Chip).clickable { ctx.call(e.domain, "toggle", listOf(e.id), null) }.padding(9.dp).size(20.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ---- home-summary (HA's Home dashboard tiles) ----
+
+/** The one-line summary HA's home-summary card shows; empty when there's nothing to say. Registries are only needed for climate. */
+fun homeSummary(summary: String, states: Map<String, Entity>, areaTemps: List<String> = emptyList(), hidden: Set<String> = emptySet()): String {
+    val all = states.values.filter { it.id !in hidden }
+    // Light groups list their members in `entity_id`; counting them too would double up.
+    fun real(e: Entity) = !e.attributes.has("entity_id")
+    return when (summary) {
+        "light" -> all.count { it.domain == "light" && real(it) && it.state == "on" }.let { if (it == 0) "All lights off" else "$it ${if (it == 1) "light" else "lights"} on" }
+        "climate" -> areaTemps.mapNotNull { states[it]?.state?.toDoubleOrNull() }.takeIf { it.isNotEmpty() }?.let {
+            val lo = String.format(Locale.US, "%.1f", it.min()); val hi = String.format(Locale.US, "%.1f", it.max())
+            if (lo == hi) "$lo°" else "$lo - $hi°"
+        }.orEmpty()
+        "security" -> {
+            val locks = all.filter { it.domain == "lock" }
+            val alarms = all.filter { it.domain == "alarm_control_panel" }
+            val unlocked = locks.count { it.state in setOf("unlocked", "jammed", "open") }
+            val disarmed = alarms.count { it.state == "disarmed" }
+            when {
+                locks.isEmpty() && alarms.isEmpty() -> ""
+                unlocked > 0 -> "$unlocked unlocked"
+                disarmed > 0 -> "$disarmed disarmed"
+                else -> "All secure"
+            }
+        }
+        "media_players" -> all.count { it.domain == "media_player" && it.state == "playing" }.let { if (it == 0) "Nothing playing" else "$it playing" }
+        "persons" -> all.filter { it.domain == "person" }.let { p -> if (p.isEmpty()) "" else "${p.count { it.state == "home" }} of ${p.size} home" }
+        "maintenance" -> all.count { it.domain == "sensor" && it.attributes.text("device_class") == "battery" && (it.state.toDoubleOrNull() ?: 100.0) < 20 }
+            .let { if (it == 0) "" else "$it low ${if (it == 1) "battery" else "batteries"}" }
+        else -> ""
+    }
+}
+
+private val SUMMARY_TITLES = mapOf(
+    "alerts" to "Alerts", "light" to "Lights", "climate" to "Climate", "security" to "Security",
+    "media_players" to "Media", "maintenance" to "Maintenance", "energy" to "Energy", "persons" to "People",
+)
+private val SUMMARY_COLORS = mapOf(
+    "alerts" to "red", "light" to "amber", "climate" to "deep-orange", "security" to "blue-grey",
+    "media_players" to "blue", "maintenance" to "grey", "energy" to "amber", "persons" to "green",
+)
+
+@Composable
+fun HomeSummaryCard(card: JSONObject, ctx: CardContext) {
+    val summary = card.text("summary")
+    val reg = rememberRegistries()
+    val text = if (summary == "alerts") {
+        val active = card.optJSONArray("alert_entities")?.objects().orEmpty().count { ctx.states[it.text("entity")]?.let(::isActive) == true }
+        if (active == 0) "" else "$active active"
+    } else homeSummary(summary, ctx.states, reg?.areas?.values?.map { it.temperature }?.filter { it.isNotEmpty() }.orEmpty(), reg?.hidden.orEmpty())
+    val color = mushroomColor(SUMMARY_COLORS[summary]) ?: TextDim
+    Row(
+        Modifier.fillMaxWidth().clickable { ctx.runner(tapAct(card, null), null)?.invoke() }.padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(36.dp).clip(CircleShape).background(color.copy(alpha = 0.25f)), contentAlignment = Alignment.Center) {
+            Icon(Icons.Rounded.ChevronRight, null, tint = color, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(14.dp))
+        Column {
+            Text(SUMMARY_TITLES[summary] ?: summary, color = Color.White, fontSize = 15.sp)
+            if (text.isNotEmpty()) Text(text, color = TextDim, fontSize = 12.sp)
+        }
+    }
+}
+
+// ---- updates / repairs / discovered devices ----
+
+@Composable
+fun UpdatesCard(card: JSONObject, ctx: CardContext, top: Boolean) {
+    val pending = ctx.states.values.filter { it.domain == "update" && it.state == "on" }.sortedBy { it.name }
+    if (pending.isEmpty() && card.optBoolean("hide_empty", true)) return
+    Surface(top) {
+        Column {
+            Title("Updates")
+            if (pending.isEmpty()) Text("Everything is up to date", color = TextDim, fontSize = 13.sp, modifier = Modifier.padding(start = 16.dp, bottom = 10.dp))
+            pending.forEach { e -> EntityCard(JSONObject().put("entity", e.id), ctx) }
+        }
+    }
+}
+
+/** Repairs and discovered devices need an admin login; for anyone else HA refuses and the card stays hidden, like HA's empty state. */
+@Composable
+fun AdminListCard(card: JSONObject, ctx: CardContext, top: Boolean) {
+    val ha = LocalHa.current
+    val repairs = card.optString("type") == "repairs"
+    val items = produceState<List<String>?>(null, repairs) {
+        while (true) {
+            value = runCatching {
+                if (repairs) ((ha.request("repairs/list_issues") as JSONObject).optJSONArray("issues") ?: JSONArray()).objects()
+                    .filter { !it.optBoolean("ignored") && it.isNull("dismissed_version") }.map { it.text("translation_key").ifEmpty { it.text("issue_id") }.replace('_', ' ').replaceFirstChar { c -> c.uppercase() } + " (" + it.text("domain") + ")" }
+                else (ha.request("config_entries/flow/progress") as JSONArray).objects()
+                    .filter { it.optJSONObject("context")?.text("source") !in setOf("user", "reauth", "reconfigure") }.map { it.text("handler") }
+            }.getOrNull()
+            delay(10 * 60_000L)
+        }
+    }.value ?: return
+    if (items.isEmpty() && card.optBoolean("hide_empty", true)) return
+    Surface(top) {
+        Column(Modifier.padding(bottom = 10.dp)) {
+            Title(if (repairs) "Repairs" else "Discovered devices")
+            if (items.isEmpty()) Text("Nothing here", color = TextDim, fontSize = 13.sp, modifier = Modifier.padding(start = 16.dp))
+            items.forEach { Text(it, color = Color.White, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) }
+        }
+    }
+}
+
+// ---- logbook ----
+
+data class LogEntry(val time: Long, val name: String, val text: String, val entityId: String)
+
+/** `logbook/get_events` rows, newest first. `message` when HA wrote one, else the new state. */
+fun parseLogbook(arr: JSONArray, states: Map<String, Entity>): List<LogEntry> = arr.objects().mapNotNull { r ->
+    val t = r.optDouble("when").takeUnless { it.isNaN() } ?: return@mapNotNull null
+    val id = r.text("entity_id")
+    val name = r.text("name").ifEmpty { states[id]?.name ?: id }
+    // The state then, not now: on/off read as actions (current brightness would be wrong for an old entry).
+    val st = r.text("state")
+    val text = r.text("message").ifEmpty {
+        when {
+            !id.startsWith("binary_sensor.") && st == "on" -> "Turned on"
+            !id.startsWith("binary_sensor.") && st == "off" -> "Turned off"
+            else -> states[id]?.let { stateText(Entity(id, st, it.attributes)) } ?: st
+        }
+    }
+    LogEntry((t * 1000).toLong(), name, text, id)
+}.sortedByDescending { it.time }
+
+@Composable
+fun LogbookCard(card: JSONObject, ctx: CardContext) {
+    val ha = LocalHa.current
+    val ids = entityRows(card).map { it.text("entity") } +
+        (card.optJSONObject("target")?.opt("entity_id")?.let { if (it is JSONArray) (0 until it.length()).map { i -> it.optString(i) } else listOf(it.toString()) }.orEmpty())
+    val hours = card.optDouble("hours_to_show", 24.0)
+    // Raw rows kept; names resolve when drawn, since the first fetch can land before entity states do.
+    val raw = produceState<JSONArray?>(null, ids, hours) {
+        while (true) {
+            runCatching {
+                ha.request("logbook/get_events") {
+                    put("start_time", isoUtc(System.currentTimeMillis() - (hours * 3_600_000).toLong()))
+                    if (ids.isNotEmpty()) put("entity_ids", JSONArray(ids))
+                } as JSONArray
+            }.getOrNull()?.let { value = it }
+            delay(60_000L)
+        }
+    }.value
+    val entries = raw?.let { parseLogbook(it, ctx.states).take(10) }
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Title(card.text("title").ifEmpty { "Logbook" })
+        if (entries?.isEmpty() == true) Text("No activity", color = TextDim, fontSize = 13.sp, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
+        entries?.forEach { l ->
+            Row(Modifier.fillMaxWidth().clickable(enabled = l.entityId.isNotEmpty()) { ctx.openMoreInfo(l.entityId) }.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(l.name, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(l.text, color = TextDim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text(timeText(isoUtc(l.time)), color = TextDim, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+// ---- picture-elements ----
+
+/** CSS "45%" → 0.45. Pixel or missing positions → null (the element isn't placed). */
+fun cssPercent(v: String?): Float? = v?.trim()?.takeIf { it.endsWith("%") }?.removeSuffix("%")?.trim()?.toFloatOrNull()?.div(100f)
+
+@Composable
+fun PictureElementsCard(card: JSONObject, ctx: CardContext) {
+    val camera = ctx.states[card.text("camera_image")]?.attributes?.text("entity_picture")
+    val img = rememberImage(pictureUrl(card, ctx.states) ?: camera)
+    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(CardBg)) {
+        if (img != null) Image(img, null, Modifier.fillMaxWidth().aspectRatio(img.width.toFloat() / img.height.coerceAtLeast(1)), contentScale = ContentScale.FillWidth)
+        else Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.matchParentSize()) {
+            Elements(card.optJSONArray("elements")?.objects().orEmpty(), ctx, maxWidth, maxHeight)
+        }
+    }
+}
+
+@Composable
+private fun Elements(elements: List<JSONObject>, ctx: CardContext, w: androidx.compose.ui.unit.Dp, h: androidx.compose.ui.unit.Dp) {
+    elements.forEach { el ->
+        if (el.text("type") == "conditional") {
+            if (conditionsMet(el.optJSONArray("conditions"), "", ctx.states)) Elements(el.optJSONArray("elements")?.objects().orEmpty(), ctx, w, h)
+            return@forEach
+        }
+        val style = el.optJSONObject("style")
+        val left = cssPercent(style?.text("left")) ?: return@forEach
+        val top = cssPercent(style?.text("top")) ?: return@forEach
+        // HA centres each element on its point (transform: translate(-50%, -50%)).
+        Box(Modifier.offset(w * left, h * top).layout { m, c ->
+            val p = m.measure(c.copy(minWidth = 0, minHeight = 0))
+            layout(p.width, p.height) { p.place(-p.width / 2, -p.height / 2) }
+        }) { Element(el, ctx, w) }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun Element(el: JSONObject, ctx: CardContext, cardWidth: androidx.compose.ui.unit.Dp) {
+    val id = el.text("entity")
+    val e = ctx.states[id]
+    val tap = ctx.runner(tapAct(el, id.ifEmpty { null }), id.ifEmpty { null }) ?: e?.let { { ctx.openMoreInfo(it.id) } }
+    val mod = Modifier.combinedClickable(onClick = { tap?.invoke() }, onLongClick = e?.let { ctx.runner(holdAct(el, id), id) })
+    when (el.text("type")) {
+        "state-label" -> e?.let {
+            val v = el.text("attribute").takeIf { a -> a.isNotEmpty() }?.let { a -> it.attributes.optString(a) } ?: stateText(it).ifEmpty { it.state }
+            Text(el.text("prefix") + v + el.text("suffix"), color = Color.White, fontSize = 14.sp, modifier = mod.background(Color(0x66000000), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp))
+        }
+        "state-badge" -> e?.let { Text(stateText(it).ifEmpty { it.state }, color = Color.White, fontSize = 12.sp, modifier = mod.clip(RoundedCornerShape(50)).background(Chip).padding(horizontal = 10.dp, vertical = 6.dp)) }
+        "state-icon" -> e?.let { Icon(entityIcon(it), it.name, tint = if (isActive(it)) entityAccent(it) else Color.White, modifier = mod.size(28.dp)) }
+        "icon" -> Icon(Icons.Rounded.ChevronRight, el.text("title").ifEmpty { null }, tint = Color.White, modifier = mod.size(28.dp))
+        "service-button", "action-button" -> Text(
+            el.text("title").ifEmpty { "Run" }, color = Color.White, fontSize = 13.sp,
+            modifier = Modifier.clip(RoundedCornerShape(50)).background(Chip).clickable {
+                val svc = el.text("action").ifEmpty { el.text("service") }
+                if ('.' in svc) ctx.call(svc.substringBefore('.'), svc.substringAfter('.'), emptyList(), el.optJSONObject("data") ?: el.optJSONObject("service_data"))
+                else tap?.invoke()
+            }.padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+        "image" -> rememberImage(pictureUrl(el, ctx.states))?.let {
+            val width = cssPercent(el.optJSONObject("style")?.text("width"))
+            Image(it, null, mod.then(if (width != null) Modifier.width(cardWidth * width) else Modifier.size(48.dp)), contentScale = ContentScale.Fit)
+        }
+        else -> Unit // custom elements need their JavaScript
+    }
+}
