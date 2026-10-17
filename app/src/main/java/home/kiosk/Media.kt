@@ -197,12 +197,13 @@ suspend fun fetchImage(fullUrl: String, maxPx: Int = 600): ImageBitmap? = withCo
     }.getOrNull()
 }
 
-/** Loads an HA-relative or absolute image URL, cached. Null while loading or on failure. */
+/** Loads an HA-relative or absolute image URL, cached. Keeps the previous image while a new URL loads; null on failure. */
 @Composable
 fun rememberImage(url: String?): ImageBitmap? {
     val base = LocalSettings.current.haUrl.trimEnd('/')
     return produceState(url?.let(imageCache::get), url) {
-        if (url == null || value != null) return@produceState
-        value = fetchImage(if (url.startsWith("/")) base + url else url)?.also { imageCache.put(url, it) }
+        // value still holds the last URL's image when url changes, so check the cache, not value
+        if (url == null) { value = null; return@produceState }
+        value = imageCache.get(url) ?: fetchImage(if (url.startsWith("/")) base + url else url)?.also { imageCache.put(url, it) }
     }.value
 }
