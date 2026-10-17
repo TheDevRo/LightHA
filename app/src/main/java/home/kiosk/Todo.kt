@@ -56,7 +56,8 @@ fun parseTodo(event: JSONObject): List<TodoItem> =
 
 @Composable
 fun TodoCard(card: JSONObject, ctx: CardContext) {
-    val id = card.optString("entity")
+    // The legacy shopping-list card has no entity: it's always the Shopping List integration's.
+    val id = card.optString("entity").ifEmpty { "todo.shopping_list" }
     val items = rememberSubscription(id, "todo/item/subscribe", { put("entity_id", id) }) { parseTodo(it) }
     var adding by remember { mutableStateOf("") }
     fun add() {

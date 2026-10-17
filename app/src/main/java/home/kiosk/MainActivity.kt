@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
         applyWindow()
 
         val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope, settings.haRefresh).also { this.ha = it }
-        val lovelace = Lovelace(ha, lifecycleScope, prefs)
+        val lovelace = Lovelace(ha, lifecycleScope, prefs, java.io.File(filesDir, "gallery.json").takeIf { BuildConfig.DEBUG })
         val voice = Voice(ha, settings.haUrl, lifecycleScope, settings)
 
         // Wake word: listens while no Assist turn is running, hands the mic over when it hears its word.
