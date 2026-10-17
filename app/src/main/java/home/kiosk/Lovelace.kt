@@ -14,7 +14,11 @@ data class DashboardInfo(val urlPath: String, val title: String)
  * The selected HA dashboard's config, kept as HA's raw JSON so a save from the tablet
  * round-trips every option this app doesn't understand.
  */
-class Lovelace(private val ha: HaClient, private val scope: CoroutineScope, private val prefs: SharedPreferences) {
+class Lovelace(
+    private val ha: HaClient, private val scope: CoroutineScope, private val prefs: SharedPreferences,
+    /** Debug builds only: the "gallery" dashboard is this local file, for checking every card type on a tablet. */
+    private val gallery: java.io.File? = null,
+) {
     private val _urlPath = MutableStateFlow(prefs.getString(PREF, DEFAULT)!!)
     val urlPath: StateFlow<String> = _urlPath
     private val _config = MutableStateFlow<JSONObject?>(null)
@@ -42,7 +46,10 @@ class Lovelace(private val ha: HaClient, private val scope: CoroutineScope, priv
             .onFailure { _error.value = "Couldn't load dashboard “${urlPath.value}”: ${it.message}" }
     }
 
-    private suspend fun fetch() = ha.request("lovelace/config") { put("url_path", urlPath.value) } as JSONObject
+    private suspend fun fetch(): JSONObject {
+        if (gallery != null && urlPath.value == "gallery") return JSONObject(gallery.readText())
+        return ha.request("lovelace/config") { put("url_path", urlPath.value) } as JSONObject
+    }
 
     /** Storage dashboards, minus admin-only ones for non-admins (as HA's sidebar does). */
     suspend fun dashboards(): List<DashboardInfo> {
@@ -125,6 +132,53 @@ fun sectionsOf(config: JSONObject, viewIndex: Int = 0): List<List<JSONObject>> {
 fun badgesOf(config: JSONObject, viewIndex: Int = 0): List<JSONObject> =
     config.optJSONArray("views")?.optJSONObject(viewIndex)?.optJSONArray("badges")?.objects().orEmpty()
 
+/** A card's `entity` and `entities` (strings or {entity: ...} rows) as row configs, in order. */
+fun entityRows(card: JSONObject): List<JSONObject> {
+    val rows = mutableListOf<JSONObject>()
+    card.text("entity").takeIf { it.isNotEmpty() }?.let { rows += JSONObject().put("entity", it) }
+    card.optJSONArray("entities")?.let { arr ->
+        (0 until arr.length()).forEach { i ->
+            val row = arr.optJSONObject(i) ?: arr.optString(i).takeIf { it.isNotEmpty() && it != "null" }?.let { JSONObject().put("entity", it) }
+            if (row != null && row.text("entity").isNotEmpty()) rows += row
+        }
+    }
+    return rows
+}
+
+/** entity-filter: the rows whose entity passes the row's (or card's) `conditions` or legacy `state_filter`. */
+fun entityFilter(card: JSONObject, states: Map<String, Entity>): List<JSONObject> = entityRows(card).filter { row ->
+    val e = states[row.text("entity")] ?: return@filter false
+    val filters = row.optJSONArray("state_filter") ?: card.optJSONArray("state_filter")
+    val conds = row.optJSONArray("conditions") ?: card.optJSONArray("conditions")
+    when {
+        filters != null -> (0 until filters.length()).any { stateFilterMatch(e, filters.opt(it)) }
+        conds != null -> conditionsMet(conds, e.id, states)
+        else -> true
+    }
+}
+
+/** One legacy `state_filter` entry: a bare value (==) or {operator, value, attribute}. Ported from HA's evaluate-filter.ts. */
+fun stateFilterMatch(e: Entity, filter: Any?): Boolean {
+    val o = filter as? JSONObject
+    val op = o?.optString("operator")?.ifEmpty { "==" } ?: "=="
+    val value = if (o != null) o.opt("value") else filter
+    val raw: Any? = o?.text("attribute")?.takeIf { it.isNotEmpty() }?.let { e.attributes.opt(it) } ?: e.state
+    val s = raw?.toString()
+    val sNum = s?.trim()?.toDoubleOrNull()
+    val vNum = (value as? Number)?.toDouble() ?: (value as? String)?.trim()?.toDoubleOrNull()
+    fun list() = (value as? JSONArray)?.let { a -> (0 until a.length()).map { a.opt(it).toString() } }
+    fun cmp(test: (Int) -> Boolean) = if (sNum != null && vNum != null) test(sNum.compareTo(vNum)) else s != null && value != null && test(s.compareTo(value.toString()))
+    return when (op) {
+        "==" -> if (sNum != null && vNum != null) sNum == vNum else s == value?.toString()
+        "!=" -> if (sNum != null && vNum != null) sNum != vNum else s != value?.toString()
+        "<" -> cmp { it < 0 }; "<=" -> cmp { it <= 0 }; ">" -> cmp { it > 0 }; ">=" -> cmp { it >= 0 }
+        "in" -> list()?.contains(s) ?: (value is String && s != null && s in value)
+        "not in" -> list()?.let { s !in it } ?: (value is String && s != null && s !in value)
+        "regex" -> value is String && s != null && runCatching { Regex(value).containsMatchIn(s) }.getOrDefault(false)
+        else -> false
+    }
+}
+
 fun isPopup(card: JSONObject) = card.optString("type") == "custom:bubble-card" && card.optString("card_type") == "pop-up"
 
 /** Bubble-card pop-ups by hash ("#pop-up-calendar" → its cards), from every view. */
@@ -138,13 +192,19 @@ fun popupTitle(card: JSONObject) = card.optString("name").ifEmpty {
 
 /** HA card `visibility` conditions. Screen/user/location conditions count as met. */
 fun visible(card: JSONObject, states: Map<String, Entity>): Boolean =
-    card.optJSONArray("visibility")?.objects()?.all { met(it, card.optString("entity"), states) } ?: true
+    conditionsMet(card.optJSONArray("visibility"), card.optString("entity"), states)
+
+/** A list of HA conditions (visibility, conditional card, entity-filter); null or empty = met. */
+fun conditionsMet(conds: JSONArray?, defaultEntity: String, states: Map<String, Entity>): Boolean =
+    conds?.objects()?.all { met(it, defaultEntity, states) } ?: true
 
 private fun met(c: JSONObject, defaultEntity: String, states: Map<String, Entity>): Boolean {
     val state = states[c.optString("entity").ifEmpty { c.optString("entity_id") }.ifEmpty { defaultEntity }]?.state
     fun matches(x: Any?) = if (x is JSONArray) (0 until x.length()).any { x.optString(it) == state } else x?.toString() == state
     val subs = c.optJSONArray("conditions")?.objects().orEmpty()
-    return when (c.optString("condition")) {
+    // Older conditional cards wrote {entity, state} with no `condition` key.
+    val kind = c.optString("condition").ifEmpty { if (c.has("state") || c.has("state_not")) "state" else "" }
+    return when (kind) {
         "state" -> when {
             c.has("state") -> matches(c.get("state"))
             c.has("state_not") -> !matches(c.get("state_not"))

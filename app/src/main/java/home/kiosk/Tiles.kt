@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BatteryFull
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.DeviceThermostat
 import androidx.compose.material.icons.rounded.DirectionsRun
@@ -158,6 +159,10 @@ fun mushroomColor(name: String?): Color? = when (name?.trim()?.lowercase()) {
     else -> name.trim().takeIf { it.startsWith("#") }?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
 }
 
+/** The icon and highlight colour an entity row would use, for cards that draw entities their own way. */
+fun entityIcon(e: Entity): ImageVector = iconOf(e, kindOf(e), isActive(e))
+fun entityAccent(e: Entity): Color = accentOf(e, kindOf(e))
+
 private fun accentOf(e: Entity, kind: Kind): Color = when (kind) {
     Kind.LIGHT -> e.attributes.optJSONArray("rgb_color")?.let { Color(it.getInt(0), it.getInt(1), it.getInt(2)) } ?: Warm
     Kind.THERMOSTAT -> if (e.attributes.optString("hvac_action") == "cooling") Cool else Heat
@@ -179,6 +184,7 @@ private fun iconOf(e: Entity, kind: Kind, active: Boolean): ImageVector = when (
     Kind.READOUT -> when (e.attributes.optString("device_class")) {
         "temperature" -> Icons.Rounded.DeviceThermostat
         "humidity", "moisture" -> Icons.Rounded.WaterDrop
+        "battery" -> Icons.Rounded.BatteryFull
         "power", "energy", "current", "voltage" -> Icons.Rounded.Bolt
         "door", "window", "opening", "garage_door" -> Icons.Rounded.DoorFront
         "motion", "occupancy", "presence" -> Icons.Rounded.DirectionsRun

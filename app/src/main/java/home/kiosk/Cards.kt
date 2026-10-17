@@ -63,11 +63,62 @@ class CardContext(
 
 /** HA card types drawn as a single entity row. */
 private val ENTITY_CARDS = setOf(
-    "entity", "tile", "button", "light", "sensor", "thermostat",
+    "entity", "tile", "button", "entity-button", "light", "sensor", "thermostat",
     "custom:mushroom-light-card", "custom:mushroom-entity-card", "custom:mushroom-template-card",
     "custom:mushroom-climate-card", "custom:mushroom-number-card", "custom:mushroom-fan-card",
     "custom:mushroom-cover-card", "custom:mushroom-lock-card", "custom:mushroom-media-player-card",
 )
+
+/** HA's own placeholder cards (loading, errors, empty sections): nothing to draw on a wall. */
+private val INTERNAL_CARDS = setOf("starting", "error", "empty-state", "recovery-mode")
+
+/** How a card is drawn. Pure, so coverage of HA's card types is unit-tested. */
+enum class Renderer {
+    HEADING, VERTICAL, HORIZONTAL, GRID, ENTITIES, CLOCK, CAMERA, MEDIA, TODO, MARKDOWN, GRAPH, CALENDAR, WEATHER, REMOTE,
+    POPUP, ENTITY, BUTTON, GLANCE, CONDITIONAL, ENTITY_FILTER, SHORTCUT, ALERT, TOGGLE_GROUP, GAUGE, STATISTIC, PLANT,
+    HUMIDIFIER, ALARM, PICTURE, IFRAME, NOTHING,
+    /** Unknown card: its entities as rows, if it names any. */
+    FALLBACK,
+}
+
+fun rendererOf(card: JSONObject): Renderer {
+    val type = card.optString("type")
+    return when {
+        type == "heading" -> Renderer.HEADING
+        type == "vertical-stack" || type == "section" -> Renderer.VERTICAL
+        type == "horizontal-stack" -> Renderer.HORIZONTAL
+        type == "grid" -> Renderer.GRID
+        type == "entities" -> Renderer.ENTITIES
+        type == "clock" -> Renderer.CLOCK
+        type == "glance" -> Renderer.GLANCE
+        type == "conditional" -> Renderer.CONDITIONAL
+        type == "entity-filter" -> Renderer.ENTITY_FILTER
+        type == "shortcut" -> Renderer.SHORTCUT
+        type == "alert" -> Renderer.ALERT
+        type == "toggle-group" -> Renderer.TOGGLE_GROUP
+        type == "gauge" -> Renderer.GAUGE
+        type == "statistic" -> Renderer.STATISTIC
+        type == "plant-status" -> Renderer.PLANT
+        type == "humidifier" -> Renderer.HUMIDIFIER
+        type == "alarm-panel" -> Renderer.ALARM
+        type == "iframe" -> Renderer.IFRAME
+        type == "shopping-list" -> Renderer.TODO
+        type in INTERNAL_CARDS -> Renderer.NOTHING
+        isCameraCard(card) -> Renderer.CAMERA
+        type == "picture" || type == "picture-entity" || type == "picture-glance" -> Renderer.PICTURE
+        isMediaCard(card) -> Renderer.MEDIA
+        isTodoCard(card) -> Renderer.TODO
+        isMarkdownCard(card) -> Renderer.MARKDOWN
+        isGraphCard(card) -> Renderer.GRAPH
+        isCalendarCard(card) -> Renderer.CALENDAR
+        isWeatherCard(card) -> Renderer.WEATHER
+        isRemoteCard(card) -> Renderer.REMOTE
+        isPopup(card) -> Renderer.POPUP
+        type in ENTITY_CARDS && card.has("entity") -> Renderer.ENTITY
+        type == "button" || type == "entity-button" -> Renderer.BUTTON
+        else -> Renderer.FALLBACK
+    }
+}
 
 /** A top-level card (gets its own surface) or a card inside a stack ([top] = false, no surface). */
 @Composable
@@ -81,17 +132,17 @@ fun CardView(card: JSONObject, ctx: CardContext, top: Boolean = true) {
 private fun CardBody(card: JSONObject, ctx: CardContext, top: Boolean) {
     val type = card.optString("type")
     val children = card.optJSONArray("cards")?.objects().orEmpty()
-    when {
-        type == "heading" -> Text(
+    when (rendererOf(card)) {
+        Renderer.HEADING -> Text(
             card.optString("heading"),
             color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
         )
-        type == "vertical-stack" -> Surface(top) { Column { children.forEach { CardView(it, ctx, top = false) } } }
-        type == "horizontal-stack" -> Surface(top) {
+        Renderer.VERTICAL -> Surface(top) { Column { children.forEach { CardView(it, ctx, top = false) } } }
+        Renderer.HORIZONTAL -> Surface(top) {
             Row { children.forEach { Box(Modifier.weight(1f)) { CardView(it, ctx, top = false) } } }
         }
-        type == "grid" -> Surface(top) {
+        Renderer.GRID -> Surface(top) {
             val cols = card.optInt("columns", 3).coerceAtLeast(1)
             Column {
                 children.chunked(cols).forEach { row ->
@@ -99,37 +150,63 @@ private fun CardBody(card: JSONObject, ctx: CardContext, top: Boolean) {
                 }
             }
         }
-        type == "entities" -> Surface(top) {
-            Column {
-                card.optString("title").takeIf { it.isNotEmpty() }?.let {
-                    Text(it, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 16.dp, top = 8.dp))
-                }
-                card.optJSONArray("entities")?.let { arr ->
-                    (0 until arr.length()).forEach { i ->
-                        val row = arr.optJSONObject(i) ?: JSONObject().put("entity", arr.optString(i))
-                        EntityCard(row, ctx)
-                    }
-                }
-            }
+        Renderer.ENTITIES -> Surface(top) { Rows(card, entityRows(card), ctx) }
+        Renderer.CLOCK -> Clock()
+        Renderer.CAMERA -> CameraCard(card, ctx)
+        Renderer.MEDIA -> MediaCard(card, ctx)
+        Renderer.TODO -> TodoCard(card, ctx)
+        Renderer.MARKDOWN -> MarkdownCard(card, ctx)
+        Renderer.GRAPH -> GraphCard(card, ctx)
+        Renderer.CALENDAR -> CalendarCard(card, ctx)
+        Renderer.WEATHER -> WeatherCard(card, ctx)
+        Renderer.REMOTE -> RemoteCard(card, ctx)
+        Renderer.POPUP -> if (ctx.editing) Placeholder("Pop-up · ${popupTitle(card)}", top)
+        Renderer.ENTITY -> Surface(top) { EntityCard(card, ctx) }
+        Renderer.BUTTON -> Surface(top) { ActionButton(card, ctx) }
+        Renderer.GLANCE -> Surface(top) { GlanceCard(card, ctx) }
+        // The inner card decides its own surface, as if it sat here directly.
+        Renderer.CONDITIONAL -> card.optJSONObject("card")?.let { inner ->
+            val met = conditionsMet(card.optJSONArray("conditions"), "", ctx.states)
+            if (met || ctx.editing) Box(Modifier.alpha(if (met) 1f else 0.4f)) { CardView(inner, ctx, top) }
         }
-        type == "clock" -> Clock()
-        isCameraCard(card) -> CameraCard(card, ctx)
-        isMediaCard(card) -> MediaCard(card, ctx)
-        isTodoCard(card) -> TodoCard(card, ctx)
-        isMarkdownCard(card) -> MarkdownCard(card, ctx)
-        isGraphCard(card) -> GraphCard(card, ctx)
-        isCalendarCard(card) -> CalendarCard(card, ctx)
-        isWeatherCard(card) -> WeatherCard(card, ctx)
-        isRemoteCard(card) -> RemoteCard(card, ctx)
-        isPopup(card) -> if (ctx.editing) Placeholder("Pop-up · ${popupTitle(card)}", top)
-        type in ENTITY_CARDS && card.has("entity") -> Surface(top) { EntityCard(card, ctx) }
-        type == "button" -> Surface(top) { ActionButton(card, ctx) }
-        else -> if (ctx.editing) Placeholder(type.removePrefix("custom:"), top)
+        Renderer.ENTITY_FILTER -> {
+            val rows = entityFilter(card, ctx.states)
+            val inner = JSONObject((card.optJSONObject("card") ?: JSONObject().put("type", "entities")).toString())
+            inner.put("entities", org.json.JSONArray(rows))
+            if (rows.isNotEmpty() || card.optBoolean("show_empty", true)) CardView(inner, ctx, top)
+        }
+        Renderer.SHORTCUT -> Surface(top) { ShortcutCard(card, ctx) }
+        Renderer.ALERT -> AlertCard(card, ctx, top)
+        Renderer.TOGGLE_GROUP -> Surface(top) { ToggleGroupCard(card, ctx) }
+        Renderer.GAUGE -> Surface(top) { GaugeCard(card, ctx) }
+        Renderer.STATISTIC -> Surface(top) { StatisticCard(card, ctx) }
+        Renderer.PLANT -> Surface(top) { PlantCard(card, ctx) }
+        Renderer.HUMIDIFIER -> Surface(top) { HumidifierCard(card, ctx) }
+        Renderer.ALARM -> Surface(top) { AlarmCard(card, ctx) }
+        Renderer.PICTURE -> PictureCard(card, ctx)
+        Renderer.IFRAME -> Surface(top) { IframeCard(card) }
+        Renderer.NOTHING -> Unit
+        Renderer.FALLBACK -> {
+            val rows = entityRows(card)
+            if (rows.isNotEmpty()) Surface(top) { Rows(card, rows, ctx) }
+            else if (ctx.editing) Placeholder(type.removePrefix("custom:"), top)
+        }
+    }
+}
+
+/** Optional title, then one entity row per config. Entities card and the fallback. */
+@Composable
+private fun Rows(card: JSONObject, rows: List<JSONObject>, ctx: CardContext) {
+    Column {
+        card.text("title").takeIf { it.isNotEmpty() }?.let {
+            Text(it, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 16.dp, top = 8.dp))
+        }
+        rows.forEach { EntityCard(it, ctx) }
     }
 }
 
 @Composable
-private fun EntityCard(card: JSONObject, ctx: CardContext) {
+fun EntityCard(card: JSONObject, ctx: CardContext) {
     val id = card.optString("entity")
     val e = ctx.states[id]
     if (e == null) {
@@ -202,13 +279,13 @@ fun Badges(badges: List<JSONObject>, ctx: CardContext) {
 }
 
 @Composable
-private fun Surface(top: Boolean, content: @Composable () -> Unit) {
+fun Surface(top: Boolean, content: @Composable () -> Unit) {
     if (!top) return content()
     Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(CardBg).padding(vertical = 6.dp)) { content() }
 }
 
 @Composable
-private fun Placeholder(text: String, top: Boolean) {
+fun Placeholder(text: String, top: Boolean) {
     Box(
         Modifier.fillMaxWidth().padding(if (top) 0.dp else 8.dp)
             .border(1.dp, Chip, RoundedCornerShape(16.dp)).padding(16.dp),

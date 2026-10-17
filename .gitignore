@@ -3,3 +3,6 @@ build/
 local.properties
 *.apk
 .cxx/
+
+# Local card gallery fixture (real entity ids): push to a debug build, never commit
+*.local.json
