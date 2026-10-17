@@ -90,7 +90,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
-private val Amber = Color(0xFFFFB74D)
 
 class MainActivity : ComponentActivity() {
     private lateinit var settings: Settings

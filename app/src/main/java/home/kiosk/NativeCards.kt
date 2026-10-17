@@ -68,7 +68,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -76,7 +75,6 @@ import java.util.Locale
 // HA's native cards that don't fit an entity row: glance, shortcut, alert, toggle-group, gauge,
 // statistic, plant-status, humidifier, alarm-panel, picture, iframe.
 
-private val Amber = Color(0xFFFFB74D)
 val Danger = Color(0xFFE57373)
 
 /** The card's (or row's) tap, falling back to more-info like HA's glance and picture cards. */
@@ -84,9 +82,7 @@ private fun tapOrInfo(conf: JSONObject, id: String, ctx: CardContext): () -> Uni
     ctx.runner(tapAct(conf, id), id) ?: { ctx.openMoreInfo(id) }
 
 @Composable
-private fun Title(text: String) {
-    if (text.isNotEmpty()) Text(text, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 8.dp, top = 6.dp, bottom = 6.dp))
-}
+private fun Title(text: String) = CardTitle(text, Modifier.padding(start = 8.dp, top = 6.dp, bottom = 6.dp))
 
 // ---- glance ----
 
@@ -258,15 +254,10 @@ fun StatisticCard(card: JSONObject, ctx: CardContext) {
     val e = ctx.states[id]
     val type = card.text("stat_type").ifEmpty { "change" }
     // Refreshed every 5 minutes; long-term statistics are written every 5 anyway.
-    val value = produceState<Double?>(null, card.toString()) {
-        while (true) {
-            val req = statisticRequest(card)
-            runCatching {
-                ha.request("recorder/statistic_during_period") { req.keys().forEach { k -> put(k, req.get(k)) } } as? JSONObject
-            }.getOrNull()?.optDouble(type)?.takeUnless { it.isNaN() }?.let { value = it }
-            delay(5 * 60_000L)
-        }
-    }.value
+    val value = polled(card.toString(), 5 * 60_000L) {
+        val req = statisticRequest(card)
+        (ha.request("recorder/statistic_during_period") { req.keys().forEach { k -> put(k, req.get(k)) } } as? JSONObject)?.optDouble(type)?.takeUnless { it.isNaN() }
+    }
     val unit = card.text("unit").ifEmpty { e?.attributes?.text("unit_of_measurement").orEmpty() }
     Column(Modifier.fillMaxWidth().clickable { ctx.openMoreInfo(id) }.padding(16.dp)) {
         Text(card.text("name").ifEmpty { e?.name ?: id }, color = TextDim, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -288,7 +279,7 @@ fun PlantCard(card: JSONObject, ctx: CardContext) {
     val problems = e.attributes.text("problem")
     val units = e.attributes.optJSONObject("unit_of_measurement_dict")
     Column(Modifier.fillMaxWidth().clickable { ctx.openMoreInfo(e.id) }.padding(16.dp)) {
-        Text(card.text("name").ifEmpty { e.name }, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+        CardTitle(card.text("name").ifEmpty { e.name })
         Spacer(Modifier.height(8.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             PLANT_READINGS.filter { e.attributes.has(it.first) && !e.attributes.isNull(it.first) }.forEach { (key, label) ->
@@ -640,17 +631,12 @@ fun UpdatesCard(card: JSONObject, ctx: CardContext, top: Boolean) {
 fun AdminListCard(card: JSONObject, ctx: CardContext, top: Boolean) {
     val ha = LocalHa.current
     val repairs = card.optString("type") == "repairs"
-    val items = produceState<List<String>?>(null, repairs) {
-        while (true) {
-            value = runCatching {
+    val items = polled(repairs, 10 * 60_000L) {
                 if (repairs) ((ha.request("repairs/list_issues") as JSONObject).optJSONArray("issues") ?: JSONArray()).objects()
                     .filter { !it.optBoolean("ignored") && it.isNull("dismissed_version") }.map { it.text("translation_key").ifEmpty { it.text("issue_id") }.replace('_', ' ').replaceFirstChar { c -> c.uppercase() } + " (" + it.text("domain") + ")" }
                 else (ha.request("config_entries/flow/progress") as JSONArray).objects()
                     .filter { it.optJSONObject("context")?.text("source") !in setOf("user", "reauth", "reconfigure") }.map { it.text("handler") }
-            }.getOrNull()
-            delay(10 * 60_000L)
-        }
-    }.value ?: return
+    } ?: return
     if (items.isEmpty() && card.optBoolean("hide_empty", true)) return
     Surface(top) {
         Column(Modifier.padding(bottom = 10.dp)) {
@@ -689,17 +675,12 @@ fun LogbookCard(card: JSONObject, ctx: CardContext) {
         (card.optJSONObject("target")?.opt("entity_id")?.let { if (it is JSONArray) (0 until it.length()).map { i -> it.optString(i) } else listOf(it.toString()) }.orEmpty())
     val hours = card.optDouble("hours_to_show", 24.0)
     // Raw rows kept; names resolve when drawn, since the first fetch can land before entity states do.
-    val raw = produceState<JSONArray?>(null, ids, hours) {
-        while (true) {
-            runCatching {
-                ha.request("logbook/get_events") {
-                    put("start_time", isoUtc(System.currentTimeMillis() - (hours * 3_600_000).toLong()))
-                    if (ids.isNotEmpty()) put("entity_ids", JSONArray(ids))
-                } as JSONArray
-            }.getOrNull()?.let { value = it }
-            delay(60_000L)
-        }
-    }.value
+    val raw = polled(ids to hours, 60_000L) {
+        ha.request("logbook/get_events") {
+            put("start_time", isoUtc(System.currentTimeMillis() - (hours * 3_600_000).toLong()))
+            if (ids.isNotEmpty()) put("entity_ids", JSONArray(ids))
+        } as JSONArray
+    }
     val entries = raw?.let { parseLogbook(it, ctx.states).take(10) }
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Title(card.text("title").ifEmpty { "Logbook" })

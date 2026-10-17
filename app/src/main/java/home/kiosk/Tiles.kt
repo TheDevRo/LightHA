@@ -57,7 +57,8 @@ val Bg = Color(0xFF0E0F12)
 val TextDim = Color(0xFF8A8F98)
 val CardBg = Color(0xFF17191E)
 val Chip = Color(0xFF262930)
-private val Warm = Color(0xFFFFB74D)
+/** The app's accent: active tiles, selected chips, primary buttons. */
+val Amber = Color(0xFFFFB74D)
 private val Heat = Color(0xFFFF8A65)
 private val Cool = Color(0xFF64B5F6)
 private val Alert = Color(0xFFE57373)
@@ -164,12 +165,12 @@ fun entityIcon(e: Entity): ImageVector = iconOf(e, kindOf(e), isActive(e))
 fun entityAccent(e: Entity): Color = accentOf(e, kindOf(e))
 
 private fun accentOf(e: Entity, kind: Kind): Color = when (kind) {
-    Kind.LIGHT -> e.attributes.optJSONArray("rgb_color")?.let { Color(it.getInt(0), it.getInt(1), it.getInt(2)) } ?: Warm
+    Kind.LIGHT -> e.attributes.optJSONArray("rgb_color")?.let { Color(it.getInt(0), it.getInt(1), it.getInt(2)) } ?: Amber
     Kind.THERMOSTAT -> if (e.attributes.optString("hvac_action") == "cooling") Cool else Heat
     Kind.LOCK, Kind.READOUT -> Alert // unlocked / door open / motion: things to notice
     Kind.MEDIA -> Cool
     Kind.COVER -> Calm
-    else -> Warm
+    else -> Amber
 }
 
 private fun iconOf(e: Entity, kind: Kind, active: Boolean): ImageVector = when (kind) {

@@ -54,7 +54,6 @@ import org.json.JSONObject
 import java.util.Date
 import java.util.Locale
 
-private val Amber = Color(0xFFFFB74D)
 
 /** HA's "more info" dialog, natively: big controls for the entity's kind, then its attributes. Live while open. */
 @OptIn(ExperimentalMaterial3Api::class)
