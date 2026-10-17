@@ -60,7 +60,7 @@ fun DashboardSheet(lovelace: Lovelace, onEditHere: () -> Unit, onDismiss: () -> 
     val scope = rememberCoroutineScope()
     var dashboards by remember { mutableStateOf<List<DashboardInfo>>(emptyList()) }
     var busy by remember { mutableStateOf<String?>(null) }
-    val current = lovelace.urlPath.value
+    val current by lovelace.urlPath.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { dashboards = runCatching { lovelace.dashboards() }.getOrDefault(emptyList()) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = CardBg) {
