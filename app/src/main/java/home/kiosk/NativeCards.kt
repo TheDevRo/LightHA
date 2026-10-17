@@ -77,7 +77,7 @@ import java.util.Locale
 // statistic, plant-status, humidifier, alarm-panel, picture, iframe.
 
 private val Amber = Color(0xFFFFB74D)
-private val Danger = Color(0xFFE57373)
+val Danger = Color(0xFFE57373)
 
 /** The card's (or row's) tap, falling back to more-info like HA's glance and picture cards. */
 private fun tapOrInfo(conf: JSONObject, id: String, ctx: CardContext): () -> Unit =
@@ -210,28 +210,35 @@ fun GaugeCard(card: JSONObject, ctx: CardContext) {
     val value = (if (attr.isNotEmpty()) e.attributes.opt(attr)?.toString() else e.state)?.toDoubleOrNull()
     val min = card.optDouble("min", 0.0)
     val max = card.optDouble("max", 100.0).takeIf { it > min } ?: (min + 1)
-    val color = value?.let { gaugeColor(card, it) } ?: Amber
     val unit = card.text("unit").ifEmpty { e.attributes.text("unit_of_measurement") }
-    Column(Modifier.fillMaxWidth().clickable(onClick = tapOrInfo(card, e.id, ctx)).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    GaugeDial(
+        fraction = value?.let { ((it - min) / (max - min)).toFloat() },
+        color = value?.let { gaugeColor(card, it) } ?: Amber,
+        text = value?.let { num(it) + unit.let { u -> if (u.isEmpty() || u == "%" || u.startsWith("°")) u else " $u" } } ?: stateText(e),
+        name = card.text("name").ifEmpty { e.name },
+        onClick = tapOrInfo(card, e.id, ctx),
+    )
+}
+
+/** A half-circle gauge: [fraction] 0..1 of the arc filled (null = empty), [text] in the middle, [name] under it. */
+@Composable
+fun GaugeDial(fraction: Float?, color: Color, text: String, name: String, onClick: (() -> Unit)? = null) {
+    Column(Modifier.fillMaxWidth().clickable(enabled = onClick != null) { onClick?.invoke() }.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.widthIn(max = 220.dp).fillMaxWidth().aspectRatio(2f), contentAlignment = Alignment.BottomCenter) {
             Canvas(Modifier.fillMaxSize()) {
                 val stroke = size.width * 0.1f
                 val arc = Size(size.width - stroke, size.width - stroke)
                 val at = Offset(stroke / 2, stroke / 2)
                 drawArc(Chip, 180f, 180f, false, at, arc, style = Stroke(stroke, cap = StrokeCap.Round))
-                val f = (((value ?: min) - min) / (max - min)).coerceIn(0.0, 1.0).toFloat()
-                if (value != null && f > 0f) drawArc(color, 180f, 180f * f, false, at, arc, style = Stroke(stroke, cap = StrokeCap.Round))
+                val f = fraction?.coerceIn(0f, 1f) ?: 0f
+                if (f > 0f) drawArc(color, 180f, 180f * f, false, at, arc, style = Stroke(stroke, cap = StrokeCap.Round))
             }
-            Text(
-                value?.let { num(it) + unit.let { u -> if (u.isEmpty() || u == "%" || u.startsWith("°")) u else " $u" } } ?: stateText(e),
-                color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Medium,
-            )
+            Text(text, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Medium)
         }
-        Text(card.text("name").ifEmpty { e.name }, color = TextDim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
+        Text(name, color = TextDim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
     }
 }
 
-private fun num(d: Double) = if (d == Math.rint(d)) d.toLong().toString() else String.format(Locale.US, "%.1f", d)
 
 // ---- statistic ----
 
