@@ -350,13 +350,13 @@ fun StatisticsGraphCard(card: JSONObject, ctx: CardContext) {
             }
         }
         if (stats == null) Box(Modifier.fillMaxWidth().height(110.dp))
-        else if (bars) Bars(series.map { it.second }, colors, Modifier.fillMaxWidth().height(110.dp))
+        else if (bars) BarChart(series.map { it.second }, colors, Modifier.fillMaxWidth().height(110.dp))
         else Sparklines(series.map { it.second }, colors, fill = ids.size == 1, modifier = Modifier.fillMaxWidth().height(110.dp))
     }
 }
 
 @Composable
-private fun Bars(series: List<List<Double?>>, colors: List<Color>, modifier: Modifier) {
+fun BarChart(series: List<List<Double?>>, colors: List<Color>, modifier: Modifier) {
     val top = series.flatten().filterNotNull().maxOrNull()?.takeIf { it > 0 } ?: return
     Canvas(modifier) {
         val n = series.firstOrNull()?.size ?: return@Canvas

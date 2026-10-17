@@ -77,7 +77,7 @@ enum class Renderer {
     HEADING, VERTICAL, HORIZONTAL, GRID, ENTITIES, CLOCK, CAMERA, MEDIA, TODO, MARKDOWN, GRAPH, CALENDAR, WEATHER, REMOTE,
     POPUP, ENTITY, BUTTON, GLANCE, CONDITIONAL, ENTITY_FILTER, SHORTCUT, ALERT, TOGGLE_GROUP, GAUGE, STATISTIC, PLANT,
     HUMIDIFIER, ALARM, PICTURE, IFRAME, HISTORY, STATISTICS_GRAPH, DISTRIBUTION, LOGBOOK, MAP, AREA, PICTURE_ELEMENTS,
-    HOME_SUMMARY, UPDATES, ADMIN_LIST, NOTHING,
+    HOME_SUMMARY, UPDATES, ADMIN_LIST, ENERGY, NOTHING,
     /** Unknown card: its entities as rows, if it names any. */
     FALLBACK,
 }
@@ -115,6 +115,7 @@ fun rendererOf(card: JSONObject): Renderer {
         type == "updates" -> Renderer.UPDATES
         type == "repairs" || type == "discovered-devices" -> Renderer.ADMIN_LIST
         type in INTERNAL_CARDS -> Renderer.NOTHING
+        energyView(type) != null -> Renderer.ENERGY
         isCameraCard(card) -> Renderer.CAMERA
         type == "picture" || type == "picture-entity" || type == "picture-glance" -> Renderer.PICTURE
         isMediaCard(card) -> Renderer.MEDIA
@@ -207,6 +208,7 @@ private fun CardBody(card: JSONObject, ctx: CardContext, top: Boolean) {
         Renderer.HOME_SUMMARY -> Surface(top) { HomeSummaryCard(card, ctx) }
         Renderer.UPDATES -> UpdatesCard(card, ctx, top)
         Renderer.ADMIN_LIST -> AdminListCard(card, ctx, top)
+        Renderer.ENERGY -> EnergyCard(card, ctx, top)
         Renderer.NOTHING -> Unit
         Renderer.FALLBACK -> {
             val rows = entityRows(card)

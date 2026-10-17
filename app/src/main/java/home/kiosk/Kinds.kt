@@ -142,7 +142,7 @@ private fun binaryText(deviceClass: String, on: Boolean) = when (deviceClass) {
 private fun org.json.JSONObject.optNum(key: String): Double? =
     if (has(key) && !isNull(key)) optDouble(key).takeUnless { it.isNaN() } else null
 
-private fun num(d: Double) = if (d == Math.rint(d)) d.toLong().toString() else String.format(Locale.US, "%.1f", d)
+fun num(d: Double) = if (d == Math.rint(d)) d.toLong().toString() else String.format(Locale.US, "%.1f", d)
 private fun deg(d: Double) = num(d) + "°"
 private fun unit(u: String) = when {
     u.isEmpty() -> ""

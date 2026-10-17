@@ -26,15 +26,8 @@ class CardsTest {
         "statistics-graph", "statistic", "vertical-stack",
     )
 
-    /** Not drawn natively yet; each later batch removes its types from here. */
-    private val pending = nativeTypes.filter { it.startsWith("energy-") || it.startsWith("water-") || it.startsWith("power-") }
-
     @Test fun everyNativeCardHasARenderer() {
-        for (t in nativeTypes) {
-            val r = rendererOf(j("""{"type":"$t","entity":"sensor.x"}"""))
-            if (t in pending) assertEquals("$t is drawn now; drop it from pending", Renderer.FALLBACK, r)
-            else assertTrue("$t falls back", r != Renderer.FALLBACK)
-        }
+        for (t in nativeTypes) assertTrue("$t falls back", rendererOf(j("""{"type":"$t","entity":"sensor.x"}""")) != Renderer.FALLBACK)
     }
 
     @Test fun rendererPicksTheSpecificCardFirst() {
@@ -163,5 +156,37 @@ class CardsTest {
         assertEquals(0.45f, cssPercent("45%")!!, 0.0001f)
         assertNull(cssPercent("30px"))
         assertNull(cssPercent(null))
+    }
+
+    @Test fun energySetupReadsBothGridFormats() {
+        val now = energySetup(j("""{"energy_sources":[{"type":"grid","stat_energy_from":"sensor.in","stat_energy_to":null,"number_energy_price":0.15},
+            {"type":"solar","stat_energy_from":"sensor.pv","stat_rate":"sensor.pv_w"}],"device_consumption":[{"stat_consumption":"sensor.fridge","name":"Fridge"}]}"""))
+        assertEquals(listOf("sensor.in"), now.gridIn)
+        assertEquals(emptyList<String>(), now.gridOut)
+        assertEquals(0.15, now.gridPrice!!, 1e-9)
+        assertEquals(listOf("sensor.pv_w"), now.power)
+        assertEquals(listOf("sensor.fridge" to "Fridge"), now.devices)
+        val old = energySetup(j("""{"energy_sources":[{"type":"grid","flow_from":[{"stat_energy_from":"sensor.a","number_energy_price":0.2}],"flow_to":[{"stat_energy_to":"sensor.b"}]}]}"""))
+        assertEquals(listOf("sensor.a") to listOf("sensor.b"), old.gridIn to old.gridOut)
+        assertEquals(0.2, old.gridPrice!!, 1e-9)
+    }
+
+    @Test fun energyFlowsAndGauges() {
+        val f = Flows(gridIn = 6.0, gridOut = 2.0, solar = 8.0, batteryIn = 0.0, batteryOut = 0.0)
+        assertEquals(12.0, f.home, 1e-9)
+        assertEquals(0.5, f.selfSufficiency!!, 1e-9)
+        assertEquals(0.75, f.solarConsumed!!, 1e-9)
+        assertEquals(0.25, f.gridNeutrality!!, 1e-9)
+        assertNull(Flows(0.0, 0.0, 0.0, 0.0, 0.0).selfSufficiency)
+    }
+
+    @Test fun energyHourlyBuckets() {
+        val midnight = 1_000_000_000_000L
+        val stats = j("""{"sensor.in":[{"start":${midnight},"change":1.5},{"start":${midnight + 3_600_000},"change":2.0}],"sensor.pv":[{"start":${midnight + 3_600_000},"change":0.5}]}""")
+        val hours = energyHours(stats, listOf("sensor.in", "sensor.pv"), midnight)
+        assertEquals(1.5, hours[0]!!, 1e-9)
+        assertEquals(2.5, hours[1]!!, 1e-9)
+        assertNull(hours[2])
+        assertEquals(3.5, energyTotals(stats)["sensor.in"]!!, 1e-9)
     }
 }
