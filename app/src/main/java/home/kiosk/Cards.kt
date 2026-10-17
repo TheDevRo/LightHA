@@ -67,6 +67,8 @@ private val ENTITY_CARDS = setOf(
     "custom:mushroom-light-card", "custom:mushroom-entity-card", "custom:mushroom-template-card",
     "custom:mushroom-climate-card", "custom:mushroom-number-card", "custom:mushroom-fan-card",
     "custom:mushroom-cover-card", "custom:mushroom-lock-card", "custom:mushroom-media-player-card",
+    "custom:mushroom-vacuum-card", "custom:mushroom-alarm-control-panel-card", "custom:mushroom-select-card",
+    "custom:mushroom-humidifier-card", "custom:mushroom-person-card", "custom:mushroom-update-card",
 )
 
 /** HA's own placeholder cards (loading, errors, empty sections): nothing to draw on a wall. */
@@ -77,7 +79,7 @@ enum class Renderer {
     HEADING, VERTICAL, HORIZONTAL, GRID, ENTITIES, CLOCK, CAMERA, MEDIA, TODO, MARKDOWN, GRAPH, CALENDAR, WEATHER, REMOTE,
     POPUP, ENTITY, BUTTON, GLANCE, CONDITIONAL, ENTITY_FILTER, SHORTCUT, ALERT, TOGGLE_GROUP, GAUGE, STATISTIC, PLANT,
     HUMIDIFIER, ALARM, PICTURE, IFRAME, HISTORY, STATISTICS_GRAPH, DISTRIBUTION, LOGBOOK, MAP, AREA, PICTURE_ELEMENTS,
-    HOME_SUMMARY, UPDATES, ADMIN_LIST, ENERGY, NOTHING,
+    HOME_SUMMARY, UPDATES, ADMIN_LIST, ENERGY, AUTO_ENTITIES, UPTIME, FLEX_TABLE, UPCOMING_MEDIA, THREEDY, POWER_FLOW, NOTHING,
     /** Unknown card: its entities as rows, if it names any. */
     FALLBACK,
 }
@@ -116,6 +118,12 @@ fun rendererOf(card: JSONObject): Renderer {
         type == "repairs" || type == "discovered-devices" -> Renderer.ADMIN_LIST
         type in INTERNAL_CARDS -> Renderer.NOTHING
         energyView(type) != null -> Renderer.ENERGY
+        type == "custom:auto-entities" -> Renderer.AUTO_ENTITIES
+        type == "custom:uptime-card" -> Renderer.UPTIME
+        type == "custom:flex-table-card" -> Renderer.FLEX_TABLE
+        type == "custom:upcoming-media-card" -> Renderer.UPCOMING_MEDIA
+        type == "custom:threedy-card" -> Renderer.THREEDY
+        type == "custom:power-flow-card-plus" || type == "custom:power-flow-card" -> Renderer.POWER_FLOW
         isCameraCard(card) -> Renderer.CAMERA
         type == "picture" || type == "picture-entity" || type == "picture-glance" -> Renderer.PICTURE
         isMediaCard(card) -> Renderer.MEDIA
@@ -209,6 +217,17 @@ private fun CardBody(card: JSONObject, ctx: CardContext, top: Boolean) {
         Renderer.UPDATES -> UpdatesCard(card, ctx, top)
         Renderer.ADMIN_LIST -> AdminListCard(card, ctx, top)
         Renderer.ENERGY -> EnergyCard(card, ctx, top)
+        Renderer.AUTO_ENTITIES -> {
+            val rows = autoEntities(card, ctx.states)
+            val inner = JSONObject((card.optJSONObject("card") ?: JSONObject().put("type", "entities")).toString())
+            inner.put("entities", org.json.JSONArray(rows))
+            if (rows.isNotEmpty() || card.optBoolean("show_empty", true)) CardView(inner, ctx, top)
+        }
+        Renderer.UPTIME -> Surface(top) { UptimeCard(card, ctx) }
+        Renderer.FLEX_TABLE -> Surface(top) { FlexTableCard(card, ctx) }
+        Renderer.UPCOMING_MEDIA -> Surface(top) { UpcomingMediaCard(card, ctx) }
+        Renderer.THREEDY -> Surface(top) { ThreedyCard(card, ctx) }
+        Renderer.POWER_FLOW -> Surface(top) { PowerFlowCard(card, ctx) }
         Renderer.NOTHING -> Unit
         Renderer.FALLBACK -> {
             val rows = entityRows(card)
@@ -225,7 +244,9 @@ private fun Rows(card: JSONObject, rows: List<JSONObject>, ctx: CardContext) {
         card.text("title").takeIf { it.isNotEmpty() }?.let {
             Text(it, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 16.dp, top = 8.dp))
         }
-        rows.forEach { EntityCard(it, ctx) }
+        // A card-wide secondary_info (e.g. "last-changed") applies to rows that don't set their own.
+        val info = card.text("secondary_info")
+        rows.forEach { EntityCard(if (info.isNotEmpty() && !it.has("secondary_info")) JSONObject(it.toString()).put("secondary_info", info) else it, ctx) }
     }
 }
 
@@ -251,7 +272,8 @@ fun EntityCard(card: JSONObject, ctx: CardContext) {
         onHold = ctx.runner(holdAct(card, id), id),
         // Only when configured: listening for double taps delays every single tap slightly.
         onDoubleTap = card.optJSONObject("double_tap_action")?.let { ctx.runner(doubleTapAct(card, id), id) },
-        secondary = secondary?.takeIf { "{{" !in it && "{%" !in it },
+        secondary = secondary?.takeIf { "{{" !in it && "{%" !in it }
+            ?: card.text("secondary_info").takeIf { it == "last-changed" || it == "last-updated" }?.let { timeText(e.lastChanged) },
         templateColor = mushroomColor(color),
         hasTemplateColor = color != null && "{{" !in color,
     )
@@ -278,29 +300,40 @@ private fun cardName(card: JSONObject): String? =
 @OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun Badges(badges: List<JSONObject>, ctx: CardContext) {
-    val shown = badges.filter { visible(it, ctx.states) }.mapNotNull { b -> ctx.states[b.optString("entity")]?.let { b to it } }
+    // Entity badges need their entity; mushroom template badges stand alone (label/content templates).
+    val shown = badges.filter { visible(it, ctx.states) && (ctx.states.containsKey(it.optString("entity")) || isTemplateBadge(it)) }
     if (shown.isEmpty()) return
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        shown.forEach { (b, e) ->
-            val text = listOfNotNull(
-                (cardName(b) ?: e.name).takeIf { b.optBoolean("show_name", true) },
-                stateText(e).takeIf { b.optBoolean("show_state", true) && it.isNotEmpty() },
+        shown.forEach { b ->
+            val e = ctx.states[b.optString("entity")]
+            val text = if (isTemplateBadge(b)) {
+                listOfNotNull(
+                    rememberTemplate(b.text("label").takeIf { it.isNotEmpty() }, e?.id),
+                    rememberTemplate(b.text("content").takeIf { it.isNotEmpty() }, e?.id),
+                ).filter { it.isNotEmpty() && "{{" !in it && "{%" !in it }.joinToString(" · ")
+            } else listOfNotNull(
+                (cardName(b) ?: e!!.name).takeIf { b.optBoolean("show_name", true) },
+                stateText(e!!).takeIf { b.optBoolean("show_state", true) && it.isNotEmpty() },
             ).joinToString(" · ")
+            if (text.isEmpty()) return@forEach
+            val color = mushroomColor(rememberTemplate(b.text("color").takeIf { it.isNotEmpty() }, e?.id))
             // Badges default to more-info on tap, like HA's.
-            val tap = ctx.runner(tapAct(b, e.id), e.id) ?: { ctx.openMoreInfo(e.id) }
+            val tap = ctx.runner(tapAct(b, e?.id), e?.id) ?: e?.let { { ctx.openMoreInfo(it.id) } } ?: {}
             Text(
                 text, color = Color.White, fontSize = 13.sp, maxLines = 1,
-                modifier = Modifier.clip(RoundedCornerShape(50)).background(Chip)
+                modifier = Modifier.clip(RoundedCornerShape(50)).background(color?.copy(alpha = 0.35f) ?: Chip)
                     .combinedClickable(
                         onClick = tap,
-                        onLongClick = ctx.runner(holdAct(b, e.id), e.id),
-                        onDoubleClick = b.optJSONObject("double_tap_action")?.let { ctx.runner(doubleTapAct(b, e.id), e.id) },
+                        onLongClick = e?.let { ctx.runner(holdAct(b, it.id), it.id) },
+                        onDoubleClick = b.optJSONObject("double_tap_action")?.let { ctx.runner(doubleTapAct(b, e?.id), e?.id) },
                     )
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             )
         }
     }
 }
+
+private fun isTemplateBadge(b: JSONObject) = b.optString("type") == "custom:mushroom-template-badge"
 
 @Composable
 fun Surface(top: Boolean, content: @Composable () -> Unit) {
