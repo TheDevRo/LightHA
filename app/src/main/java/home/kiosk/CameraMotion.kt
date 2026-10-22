@@ -15,17 +15,17 @@ val lastMotion = MutableStateFlow(0L)
  * The old Camera API on purpose: these MediaTek tablets only expose camera2 in LEGACY mode, which wraps it anyway.
  */
 @Suppress("DEPRECATION")
-class CameraMotion(private val threshold: () -> Float, private val onMotion: () -> Unit) {
+class CameraMotion(private val facing: Int, private val threshold: () -> Float, private val onMotion: () -> Unit) {
     private var camera: Camera? = null
     private val texture = SurfaceTexture(0) // preview needs a target; never drawn
     private var prev: IntArray? = null
     private var lastCheck = 0L
 
-    /** Front camera if there is one, else the first. False when there's no usable camera. */
+    /** The camera facing [facing] if there is one, else the first. False when there's no usable camera. */
     fun start(): Boolean = runCatching {
         val info = Camera.CameraInfo()
         val id = (0 until Camera.getNumberOfCameras()).firstOrNull {
-            Camera.getCameraInfo(it, info); info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT
+            Camera.getCameraInfo(it, info); info.facing == facing
         } ?: 0
         val cam = Camera.open(id)
         camera = cam

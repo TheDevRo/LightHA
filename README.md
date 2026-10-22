@@ -25,7 +25,8 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
   - **Screensaver:** after a set idle time, a black screen with a dim clock that moves every minute to avoid burn-in, at its own low brightness. Any tap wakes it.
   - **Screen follows an entity:** pick any HA entity (motion, a room's lights, someone home). The screen wakes when it turns on and sleeps when it turns off, including under Android's own screensaver (for example ImmichFrame).
   - **Wake on camera motion:** the tablet's camera compares tiny grayscale snapshots once a second (nothing is saved or sent). Motion wakes the screen, and with **Sensors** on it's reported to HA as a camera motion sensor.
-- **Sensors** (Settings → Sensors): the tablet registers as a device through HA's `mobile_app` integration, like the Companion app, and reports battery level, charger plugged in, battery temperature and camera motion. Works with any account.
+- **Sensors** (Settings → Sensors): the tablet registers as a device through HA's `mobile_app` integration, like the Companion app, and reports battery level, charger plugged in, battery temperature, camera motion (front or back camera), screen (`on`, `screensaver`, `off`), Wi-Fi signal, light level (on tablets with a light sensor), the current view, app memory and when the app started. Works with any account.
+  - **Commands** through `notify.mobile_app_<tablet>`, named like the Companion app's so existing automations work: `command_screen_on`, `command_screensaver`, `command_screen_brightness_level` (`data: {command: 0-255}`, or `auto`), `command_webview` (`data: {command: /lovelace/kitchen}`, opens that view) and `command_reload`.
 - **Voice** (Settings → Voice):
   - **Assist button:** tap the mic in the header and talk. HA's Assist pipeline (pick one, or use your default) hears when you stop, the answer shows on screen, and the reply is spoken.
   - **Wake word:** Okay Nabu, Hey Jarvis or Hey Mycroft, detected on the tablet with [microWakeWord](https://github.com/OHF-Voice/micro-wake-word) (the engine from the HA Companion app). No audio leaves the tablet until the word is heard. The header mic turns amber while it's listening. Sensitivity is adjustable.
@@ -34,7 +35,7 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
   - **Make calls** and **Receive calls** are separate. A tablet with only Make calls on never opens a port or shows up on other tablets, so it can't be called.
   - **Pairing:** tablets see each other, but only paired tablets can call or announce. Tap a nearby tablet to pair, then accept on the other one once both screens show the same 6-digit code. Remove a pairing any time in Settings.
   - **Encrypted:** pairing is an ECDH key exchange, so the pair key never crosses the network. Every call starts with both tablets proving they hold that key, and the audio is AES-GCM encrypted with a fresh key per call. Unpaired tablets are refused before anything rings.
-  - The phone button in the header lists paired tablets, then **Announce to all** (one way, to every paired tablet at once), then nearby tablets to pair with. Hold the big button to talk.
+  - The phone button in the header lists paired tablets, then **Announce to all** (one way, to every paired tablet at once), then nearby tablets to pair with. Tap the big button to lock the mic on (tap again to turn it off), or hold it to talk. Both tablets can talk at once.
   - Calls ring with Answer and Decline, or **answer automatically** after a chime and a 3 second countdown. Nothing is sent from a tablet until its talk button is held.
   - **Do not disturb:** on, off, or on a schedule (for example 22:00 until 07:00). Callers see it in their list.
   - The wake word pauses for the whole call, and a call that comes in during an Assist turn gets "busy", so the voice assistant and the intercom never fight over the mic.
@@ -132,7 +133,7 @@ Live camera video · map tiles · cards built from JavaScript templates (`button
 | `Kiosk.kt` | home-screen mode, start on boot, screensaver |
 | `Remote.kt` | universal-remote-card and per-platform key dispatch |
 | `Settings.kt`, `SettingsScreen.kt` | on-tablet settings |
-| `MobileApp.kt` | `mobile_app` registration and sensor reports (battery, charger, camera motion) |
+| `MobileApp.kt` | `mobile_app` registration and sensor reports and commands |
 | `Voice.kt` | push-to-talk Assist over the WebSocket, reply overlay and playback |
 | `Intercom.kt`, `IntercomCrypto.kt` | tablet-to-tablet calls and announcements: UDP beacon discovery, pairing, authenticated and encrypted TCP audio, call screen |
 | `WakeWord.kt`, `cpp/` | on-tablet wake word: JNI wrapper and the native microWakeWord engine (Apache-2.0, see `cpp/NOTICE`) |
