@@ -1,0 +1,9 @@
+LightHA is MIT licensed (see LICENSE). It bundles these third-party files under their own terms:
+
+- app/src/main/res/raw/wake.mp3: the wake sound from Voice Satellite
+  (https://github.com/jxlarrea/voice-satellite-card-integration, custom_components/voice_satellite/sounds/wake.mp3),
+  unmodified, licensed AGPL-3.0. Its source is that repository.
+
+- app/src/main/cpp: the microWakeWord engine from the Home Assistant Android app, Apache-2.0 (see app/src/main/cpp/NOTICE).
+
+- The Okay Nabu, Hey Jarvis and Hey Mycroft models: see the author fields in app/src/main/assets/wakeword/*.json.

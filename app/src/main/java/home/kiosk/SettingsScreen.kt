@@ -265,6 +265,64 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 }
             }
 
+            Group("Intercom") {
+                val context = LocalContext.current
+                // Calls work without the mic too (listen only), so a refusal still turns the switch on.
+                var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
+                val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { pending?.invoke(); pending = null }
+                fun withMic(set: () -> Unit) {
+                    val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                    if (granted) set() else { pending = set; askMic.launch(Manifest.permission.RECORD_AUDIO) }
+                }
+                Toggle("Make calls", settings.intercomCall) { on -> if (on) withMic { settings.intercomCall = true } else settings.intercomCall = false }
+                Toggle("Receive calls", settings.intercomReceive) { on -> if (on) withMic { settings.intercomReceive = true } else settings.intercomReceive = false }
+                if (settings.intercomReceive) {
+                    Toggle("Hear announcements", settings.intercomAnnouncements) { settings.intercomAnnouncements = it }
+                    Toggle("Answer automatically", settings.intercomAutoAnswer) { settings.intercomAutoAnswer = it }
+                    if (settings.intercomAutoAnswer) Text(
+                        "Chimes, counts down 3 seconds with Decline on screen, then the caller is heard. Nothing is sent from here until the talk button is held.",
+                        color = TextDim, fontSize = 13.sp,
+                    )
+                    Text("Do not disturb", color = Color.White, fontSize = 15.sp)
+                    Choices(listOf(0 to "Off", 1 to "On", 2 to "Scheduled"), settings.intercomDnd) { settings.intercomDnd = it }
+                    if (settings.intercomDnd == 2) {
+                        HourStepper("From", settings.intercomDndFrom) { settings.intercomDndFrom = it }
+                        HourStepper("Until", settings.intercomDndTo) { settings.intercomDndTo = it }
+                    }
+                }
+                if (settings.intercomCall || settings.intercomReceive) {
+                    OutlinedTextField(
+                        settings.intercomName, { settings.intercomName = it.take(40) }, label = { Text("This tablet's name") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                val pairs = parsePairs(settings.intercomPairs)
+                if (pairs.isNotEmpty()) {
+                    Text("Paired tablets", color = Color.White, fontSize = 15.sp)
+                    pairs.values.sortedBy { it.name }.forEach { p ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(p.name, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                            TextButton(onClick = {
+                                settings.intercomPairs = org.json.JSONObject(settings.intercomPairs).apply { remove(p.id) }.toString()
+                            }) { Text("REMOVE") }
+                        }
+                    }
+                }
+                Text(
+                    "Make calls puts a call button in the header. It lists every tablet with Receive calls on, but only paired ones can be called: " +
+                        "tap Pair, then accept on the other tablet once both screens show the same code. Receive calls makes this tablet ring when " +
+                        "a paired tablet calls. With it off nobody can call this tablet. Hold the button to talk. Calls go straight between tablets " +
+                        "on your network, encrypted, and the wake word pauses during a call.",
+                    color = TextDim, fontSize = 13.sp,
+                )
+                if (settings.intercomCall || settings.intercomReceive) Text(
+                    "Home Assistant can place and end calls and set Do not disturb through notify.mobile_app_${Build.MODEL.lowercase().replace(Regex("[^a-z0-9]+"), "_")} " +
+                        "with message intercom_call (data: kiosk: <name>), intercom_hangup, intercom_answer, intercom_decline, intercom_dnd_on or intercom_dnd_off. " +
+                        "Needs Report this tablet to Home Assistant on.",
+                    color = TextDim, fontSize = 13.sp,
+                )
+            }
+
             Group("Display") {
                 Toggle("Keep screen on", settings.keepScreenOn) { settings.keepScreenOn = it }
                 Toggle("Fullscreen (hide status and navigation bars)", settings.fullscreen) { settings.fullscreen = it }
@@ -396,3 +454,12 @@ private fun SignInForm(url: String, onSignedIn: (refresh: String, user: String) 
     ) { Text(if (busy) "Signing in…" else "Sign in") }
 }
 
+@Composable
+private fun HourStepper(label: String, hour: Int, set: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        TextButton(onClick = { set((hour + 23) % 24) }) { Text("−", fontSize = 20.sp) }
+        Text("%02d:00".format(hour), color = Color.White, fontSize = 17.sp)
+        TextButton(onClick = { set((hour + 1) % 24) }) { Text("+", fontSize = 20.sp) }
+    }
+}

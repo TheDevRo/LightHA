@@ -47,6 +47,24 @@ class Settings(private val prefs: SharedPreferences) {
     var wakeSensitivity by int("wake_sensitivity", 0)
     /** Assist pipeline id; empty = HA's preferred pipeline. */
     var voicePipeline by string("voice_pipeline", "")
+    /** Intercom: call other tablets from the header button. Only listens for their beacons. */
+    var intercomCall by bool("intercom_call", false)
+    /** Intercom: take calls. Opens the call port and announces this tablet on the LAN. Separate from [intercomCall]. */
+    var intercomReceive by bool("intercom_receive", false)
+    /** Hear Announce to all from other tablets (needs [intercomReceive]). */
+    var intercomAnnouncements by bool("intercom_announcements", true)
+    /** Answer calls after a chime and a 3 second countdown. The mic still only sends while Talk is held. */
+    var intercomAutoAnswer by bool("intercom_auto_answer", false)
+    /** Do not disturb: 0 off, 1 on, 2 scheduled from [intercomDndFrom] to [intercomDndTo] o'clock. See [dndAt]. */
+    var intercomDnd by int("intercom_dnd", 0)
+    var intercomDndFrom by int("intercom_dnd_from", 22)
+    var intercomDndTo by int("intercom_dnd_to", 7)
+    /** This tablet's intercom id, made on first use. Paired tablets know it by this. */
+    var intercomId by string("intercom_id", "")
+    /** Paired tablets as JSON: `{id: {name, key}}`, key in hex. Only these can call or be called. */
+    var intercomPairs by string("intercom_pairs", "{}")
+    /** What other tablets see in their call list. */
+    var intercomName by string("intercom_name", android.os.Build.MODEL)
     /** Empty = no PIN. */
     var pin by string("pin", "")
     private var hidden by string("hidden_views", "")

@@ -20,8 +20,8 @@ android {
         applicationId = "home.kiosk"
         minSdk = 21
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.5.0"
+        versionCode = 8
+        versionName = "0.6.0"
         // Release builds ship with no server or token: first launch opens Settings.
         buildConfigField("String", "HA_URL", "\"\"")
         buildConfigField("String", "HA_TOKEN", "\"\"")
