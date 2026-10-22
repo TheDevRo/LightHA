@@ -8,8 +8,7 @@ import android.util.Log
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
-import android.media.AudioManager
-import android.media.ToneGenerator
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.SystemClock
 import android.os.PowerManager
@@ -106,7 +105,7 @@ class MainActivity : ComponentActivity() {
 
         val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope, settings.haRefresh).also { this.ha = it }
         val lovelace = Lovelace(ha, lifecycleScope, prefs, java.io.File(filesDir, "gallery.json").takeIf { BuildConfig.DEBUG })
-        val voice = Voice(ha, settings.haUrl, lifecycleScope, settings)
+        val voice = Voice(ha, settings.haUrl, lifecycleScope, settings, chime = ::chime)
         // An Assist turn holds the mic, so a call coming in then gets "busy".
         val intercom = Intercom(this, lifecycleScope, settings, busy = { voice.state.value != null }, onRing = ::wakeScreen).also { this.intercom = it }
         lifecycleScope.launch { snapshotFlow { settings.intercomCall to settings.intercomReceive }.collect { intercom.apply(it.first, it.second) } }
@@ -123,7 +122,7 @@ class MainActivity : ComponentActivity() {
         }
 
         // Wake word: listens while no Assist turn or call is running, hands the mic over when it hears its word.
-        wake = WakeWordListener(this, onMicBroken = { settings.micBroken = true }) { wakeScreen(); beep(); voice.start(settings.voicePipeline) }
+        wake = WakeWordListener(this, onMicBroken = { settings.micBroken = true }) { wakeScreen(); voice.start(settings.voicePipeline) }
         lifecycleScope.launch {
             combine(voice.state, intercom.state, snapshotFlow { (settings.wakeWord to settings.wakeSensitivity).takeIf { !settings.micBroken } }) { turn, call, w ->
                 w.takeIf { turn == null && call == null }
@@ -247,9 +246,9 @@ class MainActivity : ComponentActivity() {
     private fun minuteTicks() = kotlinx.coroutines.flow.flow { while (true) { emit(Unit); delay(60_000) } }
     private var intercom: Intercom? = null
 
-    private fun beep() = ToneGenerator(AudioManager.STREAM_MUSIC, 70).let { t ->
-        t.startTone(ToneGenerator.TONE_PROP_ACK, 150)
-        window.decorView.postDelayed({ t.release() }, 300)
+    /** The Voice Satellite wake sound (AGPL-3.0, see NOTICE), at the start of every voice turn. */
+    private fun chime() {
+        MediaPlayer.create(this, R.raw.wake)?.apply { setOnCompletionListener { it.release() }; start() }
     }
 
     private var mobile: MobileApp? = null
@@ -493,7 +492,8 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, intercom: Inter
     if (saver) Screensaver(onWake = { saver = false; lastTouch[0] = System.currentTimeMillis() })
 
     val talking by voice.state.collectAsStateWithLifecycle()
-    talking?.let { VoiceOverlay(it, onClose = voice::stop) }
+    val level by voice.level.collectAsStateWithLifecycle()
+    talking?.let { VoiceOverlay(it, level, onClose = voice::stop) }
 
     if (dialing) {
         val peers by intercom.peers.collectAsStateWithLifecycle()

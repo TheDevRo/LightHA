@@ -6,29 +6,43 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
@@ -45,6 +59,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import kotlin.coroutines.resume
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 enum class VoicePhase { LISTENING, THINKING, SPEAKING, DONE, ERROR }
 
@@ -79,10 +95,13 @@ fun voiceStep(s: VoiceState, event: JSONObject): VoiceState {
  * Push-to-talk Assist: streams the mic to an HA pipeline over the existing WebSocket, shows what was heard and the
  * answer, and plays the spoken reply. HA's own voice detection decides when you've stopped talking.
  */
-class Voice(private val ha: HaClient, private val baseUrl: String, private val scope: CoroutineScope, private val settings: Settings) {
+class Voice(private val ha: HaClient, private val baseUrl: String, private val scope: CoroutineScope, private val settings: Settings, private val chime: () -> Unit) {
     private val _state = MutableStateFlow<VoiceState?>(null)
     /** null = nothing on screen. */
     val state: StateFlow<VoiceState?> = _state
+    private val _level = MutableStateFlow(0f)
+    /** Loudness of the mic while listening, 0..1, for the overlay's bar. */
+    val level: StateFlow<Float> = _level
     private var job: Job? = null
 
     fun stop() {
@@ -94,6 +113,7 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
     fun start(pipeline: String) {
         job?.cancel()
         _state.value = VoiceState()
+        chime()
         job = scope.launch {
             // Whatever goes wrong inside (a hung reply, a mic that won't start), the turn ends and the overlay goes
             // away, so the wake word gets the mic back.
@@ -133,8 +153,12 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
                     while (_state.value?.phase == VoicePhase.LISTENING && SystemClock.elapsedRealtime() < until) {
                         val n = mic.read(buf, 0, buf.size)
                         if (n < 0) { settings.micBroken = true; break } // audio service died; see Settings.micBroken
-                        if (n > 0) ha.sendBinary(byteArrayOf(handler.toByte()) + buf.copyOf(n))
+                        if (n > 0) {
+                            ha.sendBinary(byteArrayOf(handler.toByte()) + buf.copyOf(n))
+                            _level.value = loudness(buf, n)
+                        }
                     }
+                    _level.value = 0f
                     mic.stop()
                     ha.sendBinary(byteArrayOf(handler.toByte())) // handler byte alone = end of audio
                 }
@@ -166,7 +190,8 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
         cont.invokeOnCancellation { p.release() }
         val finish = { if (cont.isActive) { p.release(); cont.resume(Unit) } }
         runCatching {
-            p.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            val usage = if (Build.VERSION.SDK_INT >= 26) AudioAttributes.USAGE_ASSISTANT else AudioAttributes.USAGE_MEDIA
+            p.setAudioAttributes(AudioAttributes.Builder().setUsage(usage).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             p.setDataSource(url)
             p.setOnPreparedListener { it.start() }
             p.setOnCompletionListener { finish() }
@@ -186,26 +211,81 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
 }
 
 
-/** Bottom card for a voice turn; tapping anywhere cancels it. */
+/** RMS of little-endian PCM16, scaled so normal speech fills most of 0..1. */
+fun loudness(pcm: ByteArray, n: Int): Float {
+    var sum = 0.0
+    var i = 0
+    while (i + 1 < n) {
+        val v = ((pcm[i + 1].toInt() shl 8) or (pcm[i].toInt() and 0xFF)).toShort().toDouble()
+        sum += v * v
+        i += 2
+    }
+    val rms = sqrt(sum / maxOf(1, n / 2)) / 32768.0
+    return (rms * 8).toFloat().coerceIn(0f, 1f)
+}
+
+private val BarColors = listOf(Amber, Color(0xFFFF7A45), Color(0xFFE85D9E), Color(0xFF4FC3F7), Amber)
+
+/**
+ * Docked voice bubble: sits at the bottom over the dashboard (which stays usable) with a glowing gradient bar
+ * along its foot. The bar slides slowly while listening, fast while thinking and steadily while speaking, and
+ * swells with your voice. Tapping the bubble cancels the turn.
+ */
 @Composable
-fun VoiceOverlay(s: VoiceState, onClose: () -> Unit) {
-    Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable(onClick = onClose), contentAlignment = Alignment.BottomCenter) {
-        Row(
-            Modifier.padding(24.dp).widthIn(max = 560.dp).fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(CardBg).padding(20.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp),
+fun VoiceOverlay(s: VoiceState, level: Float, onClose: () -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        Column(
+            Modifier.padding(24.dp).widthIn(max = 560.dp).fillMaxWidth().shadow(24.dp, RoundedCornerShape(28.dp))
+                .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(28.dp)).clip(RoundedCornerShape(28.dp))
+                .background(CardBg).clickable(onClick = onClose).padding(start = 24.dp, end = 24.dp, top = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Icon(Icons.Rounded.Mic, null, tint = if (s.phase == VoicePhase.LISTENING) Amber else TextDim, modifier = Modifier.size(36.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                when {
-                    s.phase == VoicePhase.LISTENING -> Text("Listening…", color = Color.White, fontSize = 18.sp)
-                    s.heard.isNotEmpty() -> Text("“${s.heard}”", color = TextDim, fontSize = 15.sp)
-                }
-                when {
-                    s.phase == VoicePhase.ERROR -> Text(s.reply, color = Color(0xFFE57373), fontSize = 17.sp)
-                    s.reply.isNotEmpty() -> Text(s.reply, color = Color.White, fontSize = 17.sp)
-                    s.phase == VoicePhase.THINKING -> Text("…", color = Color.White, fontSize = 17.sp)
-                }
+            when {
+                s.phase == VoicePhase.LISTENING -> Text("Listening…", color = Color.White, fontSize = 18.sp)
+                s.heard.isNotEmpty() -> Text("“${s.heard}”", color = TextDim, fontSize = 15.sp)
             }
+            when {
+                s.phase == VoicePhase.ERROR -> Text(s.reply, color = Color(0xFFE57373), fontSize = 17.sp)
+                s.reply.isNotEmpty() -> Text(s.reply, color = Color.White, fontSize = 17.sp)
+                s.phase == VoicePhase.THINKING -> Text("…", color = Color.White, fontSize = 17.sp)
+            }
+            VoiceBar(s.phase, level, Modifier.fillMaxWidth().height(30.dp))
         }
+    }
+}
+
+@Composable
+private fun VoiceBar(phase: VoicePhase, level: Float, modifier: Modifier) {
+    val period = when (phase) { VoicePhase.THINKING -> 0.5f; VoicePhase.SPEAKING -> 2f; else -> 3f }
+    var shift by remember { mutableFloatStateOf(0f) }
+    var clock by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(period) {
+        var last = 0L
+        while (true) withFrameNanos { now ->
+            if (last != 0L) shift = (shift + (now - last) / 1e9f / period) % 1f
+            last = now
+            clock = now / 1e9f
+        }
+    }
+    val heard by animateFloatAsState(level, tween(90), label = "level")
+    Canvas(modifier) {
+        // The reply's audio isn't measured, so speaking gets a gentle pulse instead.
+        val l = when (phase) {
+            VoicePhase.LISTENING -> heard
+            VoicePhase.SPEAKING -> 0.3f + 0.2f * sin(clock * 7f)
+            VoicePhase.THINKING -> 0.15f
+            else -> 0f
+        }
+        val h = 6.dp.toPx() * (1 + 2 * l)
+        val bottom = size.height - 8.dp.toPx()
+        val x = -size.width * shift
+        val brush = if (phase == VoicePhase.ERROR) SolidColor(Color(0xFFE57373))
+        else Brush.linearGradient(BarColors, Offset(x, 0f), Offset(x + size.width, 0f), TileMode.Repeated)
+        // Glow: a few wider, fainter copies under the bar, brighter as the voice gets louder.
+        for (i in 3 downTo 1) {
+            val g = i * (2.dp.toPx() + 3.dp.toPx() * l)
+            drawRoundRect(brush, Offset(-g, bottom - h - g), Size(size.width + 2 * g, h + 2 * g), CornerRadius(h / 2 + g), alpha = (0.1f + 0.25f * l) / i)
+        }
+        drawRoundRect(brush, Offset(0f, bottom - h), Size(size.width, h), CornerRadius(h / 2))
     }
 }
