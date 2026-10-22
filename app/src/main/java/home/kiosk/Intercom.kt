@@ -24,12 +24,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Campaign
 import androidx.compose.material.icons.rounded.DoNotDisturbOn
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -45,6 +48,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -83,16 +87,17 @@ import kotlin.coroutines.coroutineContext
 /** Another tablet taking calls, as heard from its beacon. */
 data class Peer(val id: String, val name: String, val host: String, val port: Int, val seen: Long, val dnd: Boolean = false)
 
-enum class CallPhase { CALLING, RINGING, LIVE, ENDED }
+enum class CallPhase { PAIRING, CALLING, RINGING, LIVE, ENDED }
 
 /**
  * What the call screen shows. [canTalk] is false when this tablet's mic can't be used (listen only) and on the
  * tablets hearing an announcement. [announce] is set on both the announcer and its listeners; [outgoing] tells
- * them apart. [replyTo] is who "Call back" rings.
+ * them apart. [replyTo] is who "Call back" rings. [code] is the pairing code both screens show.
  */
 data class CallState(
     val phase: CallPhase, val peer: String, val note: String = "", val talking: Boolean = false, val canTalk: Boolean = true,
     val announce: Boolean = false, val outgoing: Boolean = false, val missed: Boolean = false, val replyTo: Peer? = null,
+    val code: String = "",
 )
 
 /** The beacon a tablet taking calls sends every few seconds; null for anything else on the port. */
@@ -112,6 +117,7 @@ fun dndAt(mode: Int, from: Int, to: Int, hour: Int) = when (mode) {
 /** The Intercom sensor's state in HA. */
 fun haStatus(s: CallState?) = when {
     s == null -> "idle"
+    s.phase == CallPhase.PAIRING -> "pairing"
     s.phase == CallPhase.CALLING -> "calling"
     s.phase == CallPhase.RINGING -> "ringing"
     s.phase == CallPhase.ENDED -> if (s.missed) "missed" else "idle"
@@ -119,14 +125,28 @@ fun haStatus(s: CallState?) = when {
     else -> "in_call"
 }
 
+/** A tablet this one has paired with. */
+data class Paired(val id: String, val name: String, val key: ByteArray)
+
+fun parsePairs(json: String): Map<String, Paired> = runCatching {
+    val o = JSONObject(json)
+    o.keys().asSequence().associateWith { id -> o.getJSONObject(id).let { Paired(id, it.getString("name"), it.getString("key").unhex()) } }
+}.getOrElse { emptyMap() }
+
 /**
  * Tablet-to-tablet intercom on the LAN. Making and taking calls are separate switches: a tablet that only calls
- * never opens a port or announces itself, so nobody can reach it.
+ * never opens a port or announces itself, so nobody can reach it. Tablets see each other but only talk once paired:
+ * one asks, the other accepts, and both screens show the same code.
  *
- * Wire: a tablet taking calls sends a UDP beacon to [BEACON_PORT]. A call is one TCP connection to its [PORT]: the
- * caller sends a JSON line `{name, kind: call|announce}`, the callee answers `ringing`, `listening` (announcement),
- * `busy`, `dnd` or `off`, then `answer` or `decline` for a call. After that both sides send raw 16 kHz mono PCM16
- * while their talk button is held. Closing the socket ends it. Push to talk only, so it never needs echo cancellation.
+ * Wire: a tablet taking calls sends a UDP beacon to [BEACON_PORT]. Everything else is one TCP connection to its
+ * [PORT], starting with a JSON line from the caller:
+ *  - `{kind: pair, id, name, pub}`: the callee answers `{pub}`, both derive the secret and code (see
+ *    [IntercomCrypto]), then the callee sends `accept` or `decline` once someone taps.
+ *  - `{kind: call|announce, id, name, nonce}`: the callee answers `{nonce, proof}` (or `{status: unpaired}`), the
+ *    caller answers `{proof}`. Then the callee says `ringing`, `listening` (announcement), `busy`, `dnd` or `off`,
+ *    and `answer` or `decline` for a call. After that both sides send AES-GCM sealed 20 ms frames of 16 kHz mono
+ *    PCM16 while their talk button is held. Closing the socket ends it. Push to talk only, so it never needs echo
+ *    cancellation.
  */
 class Intercom(private val context: Context, scope: CoroutineScope, private val settings: Settings, private val busy: () -> Boolean, private val onRing: () -> Unit) {
     // A port already taken or a dropped network must never take the app down.
@@ -135,9 +155,10 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
     /** null = no call on screen. */
     val state: StateFlow<CallState?> = _state
     private val _peers = MutableStateFlow<List<Peer>>(emptyList())
+    /** Every tablet taking calls on the network, paired or not. */
     val peers: StateFlow<List<Peer>> = _peers
 
-    private val id = UUID.randomUUID().toString()
+    private val id = settings.intercomId.ifEmpty { UUID.randomUUID().toString().also { settings.intercomId = it } }
     private var receiving: Job? = null
     private var browsing: Job? = null
     @Volatile private var sockets: List<Socket> = emptyList()
@@ -154,6 +175,16 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
         if (!receive) { receiving?.cancel(); receiving = null }
     }
 
+    fun pairs() = parsePairs(settings.intercomPairs)
+
+    private fun savePair(peerId: String, name: String, key: ByteArray) {
+        val o = runCatching { JSONObject(settings.intercomPairs) }.getOrElse { JSONObject() }
+        settings.intercomPairs = o.put(peerId, JSONObject().put("name", name).put("key", key.hex())).toString()
+    }
+
+    /** When each tablet last asked to pair, so a declined one can't keep popping up the request. */
+    private val pairAsked = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     fun dnd() = dndAt(settings.intercomDnd, settings.intercomDndFrom, settings.intercomDndTo, Calendar.getInstance().get(Calendar.HOUR_OF_DAY))
 
     fun canTalk() = !settings.micBroken &&
@@ -161,12 +192,38 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
 
     private fun idle() = _state.value.let { it == null || it.phase == CallPhase.ENDED }
 
-    /** For Home Assistant: rings the tablet with this name. False when there's none or a call is already up. */
+    /** For Home Assistant: rings the paired tablet with this name. False when there's none or a call is already up. */
     fun callByName(name: String): Boolean {
-        val p = _peers.value.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) } ?: return false
+        val paired = pairs()
+        val p = _peers.value.firstOrNull { it.id in paired && it.name.equals(name.trim(), ignoreCase = true) } ?: return false
         if (!idle()) return false
         call(p)
         return true
+    }
+
+    /** Asks [peer] to pair. Both screens show the same code; it's done once they tap Accept. */
+    fun pair(peer: Peer) {
+        if (!idle()) return
+        val my = gen.incrementAndGet()
+        _state.value = CallState(CallPhase.PAIRING, peer.name, "Connecting…", outgoing = true)
+        io.launch {
+            val outcome = runCatching {
+                val s = Socket().apply { connect(InetSocketAddress(peer.host, peer.port), 3_000); soTimeout = PAIR_MS }
+                if (gen.get() != my) { s.close(); return@runCatching null }
+                sockets = listOf(s)
+                val keys = IntercomCrypto.newKeyPair()
+                send(s, JSONObject().put("kind", "pair").put("id", id).put("name", settings.intercomName).put("pub", keys.public.encoded.hex()))
+                val reply = JSONObject(readLine(s.getInputStream()) ?: return@runCatching "Couldn't reach ${peer.name}.")
+                if (!reply.has("pub")) return@runCatching "${peer.name} is busy."
+                val secret = IntercomCrypto.agree(keys, reply.getString("pub").unhex())
+                _state.update { it?.copy(note = "Waiting for ${peer.name} to accept. Check both screens show this code.", code = IntercomCrypto.pairCode(secret)) }
+                when (readLine(s.getInputStream())) {
+                    "accept" -> { savePair(peer.id, peer.name, IntercomCrypto.pairKey(secret)); "Paired with ${peer.name}." }
+                    else -> "${peer.name} didn't accept."
+                }
+            }
+            end(my, outcome.getOrElse { "Couldn't reach ${peer.name}." })
+        }
     }
 
     fun call(peer: Peer) {
@@ -175,7 +232,7 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
         _state.value = CallState(CallPhase.CALLING, peer.name, "Connecting…", outgoing = true, replyTo = peer)
         io.launch {
             val outcome = runCatching {
-                val s = open(peer, "call")
+                val (s, session) = open(peer, "call")
                 if (gen.get() != my) { s.close(); return@runCatching null } // cancelled while connecting
                 sockets = listOf(s)
                 val input = s.getInputStream()
@@ -190,49 +247,56 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
                     "answer" -> {
                         s.soTimeout = 0
                         _state.update { it?.copy(phase = CallPhase.LIVE, canTalk = canTalk()) }
-                        live(listOf(s), play = true)
+                        live(listOf(s to session), play = true)
                         "Call ended."
                     }
                     "decline" -> "${peer.name} declined."
                     else -> "No answer."
                 }
             }
-            end(my, outcome.getOrElse { "Couldn't reach ${peer.name}." })
+            end(my, outcome.getOrElse { (it as? Refused)?.message ?: "Couldn't reach ${peer.name}." })
         }
     }
 
-    /** One way to every tablet taking calls. Tablets on Do not disturb, in a call or with announcements off skip it. */
+    /** One way to every paired tablet. Tablets on Do not disturb, in a call or with announcements off skip it. */
     fun announce() {
         if (!idle()) return
         val my = gen.incrementAndGet()
         _state.value = CallState(CallPhase.CALLING, "Everyone", "Connecting…", announce = true, outgoing = true)
+        val paired = pairs()
         io.launch {
-            val reached = _peers.value.filter { !it.dnd }.map { p ->
-                async { runCatching { open(p, "announce").let { s -> if (readLine(s.getInputStream()) == "listening") p to s else { s.close(); null } } }.getOrNull() }
+            val reached = _peers.value.filter { !it.dnd && it.id in paired }.map { p ->
+                async {
+                    runCatching {
+                        val (s, session) = open(p, "announce")
+                        if (readLine(s.getInputStream()) == "listening") Triple(p, s, session) else { s.close(); null }
+                    }.getOrNull()
+                }
             }.awaitAll().filterNotNull()
             if (gen.get() != my) { reached.forEach { runCatching { it.second.close() } }; return@launch }
-            if (reached.isEmpty()) { end(my, "No tablet is taking announcements right now."); return@launch }
+            if (reached.isEmpty()) { end(my, "No paired tablet is taking announcements right now."); return@launch }
             sockets = reached.map { it.second }
             reached.forEach { it.second.soTimeout = 0 }
             _state.update { it?.copy(phase = CallPhase.LIVE, canTalk = canTalk(), note = "To " + reached.joinToString { p -> p.first.name }) }
-            runCatching { live(sockets, play = false) }
+            runCatching { live(reached.map { it.second to it.third }, play = false) }
             end(my, "Announcement over.")
         }
     }
 
+    /** Answers a call or accepts a pairing request. */
     fun answer() = answer?.invoke()
 
     /** Ends, cancels, declines or dismisses whatever is up. */
     fun hangup() {
         val socks = sockets
-        val ringing = _state.value?.phase == CallPhase.RINGING
+        val asked = _state.value.let { it?.phase == CallPhase.RINGING || (it?.phase == CallPhase.PAIRING && !it.outgoing) }
         gen.incrementAndGet()
         sockets = emptyList()
         answer = null
         talking = false
         _state.value = null
         io.launch {
-            if (ringing) runCatching { socks.firstOrNull()?.getOutputStream()?.write("decline\n".toByteArray()) }
+            if (asked) runCatching { socks.firstOrNull()?.getOutputStream()?.write("decline\n".toByteArray()) }
             socks.forEach { runCatching { it.close() } }
         }
     }
@@ -249,11 +313,32 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
         _state.update { it?.copy(talking = on) }
     }
 
-    private fun open(peer: Peer, kind: String) = Socket().apply {
-        connect(InetSocketAddress(peer.host, peer.port), 3_000)
-        soTimeout = RING_MS
-        getOutputStream().write((JSONObject().put("name", settings.intercomName).put("kind", kind).toString() + "\n").toByteArray())
+    private class Refused(message: String) : Exception(message)
+
+    /** Connects and runs the handshake: both sides prove they hold the pair key. */
+    private fun open(peer: Peer, kind: String): Pair<Socket, AudioSession> {
+        val key = pairs()[peer.id]?.key ?: throw Refused("${peer.name} isn't paired with this tablet.")
+        val s = Socket()
+        try {
+            s.connect(InetSocketAddress(peer.host, peer.port), 3_000)
+            s.soTimeout = RING_MS
+            val mine = IntercomCrypto.nonce()
+            send(s, JSONObject().put("kind", kind).put("id", id).put("name", settings.intercomName).put("nonce", mine.hex()))
+            val r = JSONObject(readLine(s.getInputStream()) ?: throw Refused("${peer.name} hung up."))
+            if (r.optString("status") == "unpaired") throw Refused("${peer.name} removed this tablet. Pair again.")
+            val theirs = r.getString("nonce").unhex()
+            if (!IntercomCrypto.same(r.getString("proof").unhex(), IntercomCrypto.proof(key, "callee", mine, theirs))) {
+                throw Refused("${peer.name} couldn't prove it's the tablet you paired with.")
+            }
+            send(s, JSONObject().put("proof", IntercomCrypto.proof(key, "caller", mine, theirs).hex()))
+            return s to AudioSession(IntercomCrypto.sessionKey(key, mine, theirs), caller = true)
+        } catch (e: Exception) {
+            s.close()
+            throw e
+        }
     }
+
+    private fun send(s: Socket, o: JSONObject) = s.getOutputStream().write((o.toString() + "\n").toByteArray())
 
     /** Shows [note] for a few seconds (a missed call longer), then clears the screen. null clears it now. */
     private suspend fun end(my: Int, note: String?, missed: Boolean = false) {
@@ -263,7 +348,7 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
         answer = null
         talking = false
         if (note == null || _state.value == null) { _state.value = null; return }
-        _state.update { it?.copy(phase = CallPhase.ENDED, note = note, talking = false, missed = missed) }
+        _state.update { it?.copy(phase = CallPhase.ENDED, note = note, talking = false, missed = missed, code = "") }
         delay(if (missed) 30_000 else 4_000)
         if (gen.get() == my) _state.value = null
     }
@@ -300,72 +385,74 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
         server.soTimeout = 2_000
         while (coroutineContext.isActive) {
             val s = try { server.accept() } catch (_: SocketTimeoutException) { continue }
-            io.launch { incoming(s) }
+            io.launch { runCatching { incoming(s) }.onFailure { runCatching { s.close() } } }
         }
     }
 
     private suspend fun incoming(s: Socket) {
-        val hello = runCatching { s.soTimeout = 5_000; JSONObject(readLine(s.getInputStream()) ?: "") }.getOrNull()
-        val name = hello?.optString("name")?.take(40).orEmpty()
-        val announcing = hello?.optString("kind") == "announce"
+        s.soTimeout = 5_000
+        val hello = JSONObject(readLine(s.getInputStream()) ?: "")
+        val from = hello.getString("id")
+        val name = hello.optString("name").take(40).ifEmpty { "A tablet" }
+        if (hello.optString("kind") == "pair") return pairRequest(s, from, name, hello.getString("pub").unhex())
+
+        // Unpaired tablets are told so and nothing else: no ring, no Do not disturb, no state.
+        val key = pairs()[from]?.key
+        if (key == null) { send(s, JSONObject().put("status", "unpaired")); s.close(); return }
+        val theirs = hello.getString("nonce").unhex()
+        val mine = IntercomCrypto.nonce()
+        send(s, JSONObject().put("nonce", mine.hex()).put("proof", IntercomCrypto.proof(key, "callee", theirs, mine).hex()))
+        val proof = JSONObject(readLine(s.getInputStream()) ?: "").getString("proof").unhex()
+        if (!IntercomCrypto.same(proof, IntercomCrypto.proof(key, "caller", theirs, mine))) { Log.w(TAG, "bad proof from $name"); s.close(); return }
+        val session = AudioSession(IntercomCrypto.sessionKey(key, theirs, mine), caller = false)
+
+        val announcing = hello.optString("kind") == "announce"
         val refuse = when {
-            name.isEmpty() -> "busy"
             !idle() || busy() -> "busy"
             dnd() -> "dnd"
             announcing && !settings.intercomAnnouncements -> "off"
             else -> null
         }
-        if (refuse != null) {
-            runCatching { s.getOutputStream().write("$refuse\n".toByteArray()); s.close() }
-            return
-        }
+        if (refuse != null) { runCatching { s.getOutputStream().write("$refuse\n".toByteArray()); s.close() }; return }
         val my = gen.incrementAndGet()
         sockets = listOf(s)
-        val from = Peer("", name, s.inetAddress.hostAddress.orEmpty(), PORT, 0)
+        val back = _peers.value.firstOrNull { it.id == from } ?: Peer(from, name, s.inetAddress.hostAddress.orEmpty(), PORT, 0)
         if (announcing) {
-            _state.value = CallState(CallPhase.LIVE, name, "Announcement", canTalk = false, announce = true, replyTo = from)
+            _state.value = CallState(CallPhase.LIVE, name, "Announcement", canTalk = false, announce = true, replyTo = back)
             val ok = runCatching {
                 s.getOutputStream().write("listening\n".toByteArray())
                 s.soTimeout = 0
                 withContext(Dispatchers.Main) { onRing() }
                 chime()
-                live(listOf(s), play = true)
+                live(listOf(s to session), play = true)
             }.isSuccess
             end(my, if (ok) "Announcement from $name is over." else null)
             return
         }
 
-        _state.value = CallState(CallPhase.RINGING, name, "Calling…", replyTo = from)
-        val answered = MutableStateFlow(false)
-        answer = { answered.value = true }
+        _state.value = CallState(CallPhase.RINGING, name, "Calling…", replyTo = back)
         val auto = settings.intercomAutoAnswer
         val tone = runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 80) }.getOrNull()
         val outcome = runCatching {
             s.getOutputStream().write("ringing\n".toByteArray())
             withContext(Dispatchers.Main) { onRing() }
-            // Ring until answered, declined (hangup() closes the socket) or the caller gives up. The caller sends
-            // nothing until answered, so a short read only ever times out or sees the caller hang up.
-            val input = s.getInputStream()
-            s.soTimeout = 200
-            val start = System.currentTimeMillis()
-            var rung = 0L
             if (auto) tone?.startTone(ToneGenerator.TONE_PROP_BEEP2, 400)
-            while (!answered.value) {
-                val now = System.currentTimeMillis()
+            val answered = waitForTap(s, RING_MS) { elapsed, rung ->
                 if (auto) {
-                    val left = ((AUTO_ANSWER_MS - (now - start) + 999) / 1_000).toInt()
-                    if (left <= 0) break
+                    val left = ((AUTO_ANSWER_MS - elapsed + 999) / 1_000).toInt()
                     _state.update { it?.copy(note = "Answering in $left…") }
-                } else if (now - rung > 2_000) { tone?.startTone(ToneGenerator.TONE_SUP_RINGTONE, 1_000); rung = now }
-                if (now - start > RING_MS) return@runCatching "missed"
-                val r = try { input.read() } catch (_: SocketTimeoutException) { 0 }
-                if (r < 0) return@runCatching "missed"
+                    left <= 0
+                } else {
+                    if (rung) tone?.startTone(ToneGenerator.TONE_SUP_RINGTONE, 1_000)
+                    false
+                }
             }
+            if (!answered) return@runCatching "missed"
             tone?.stopTone()
             s.getOutputStream().write("answer\n".toByteArray())
             s.soTimeout = 0
             _state.update { it?.copy(phase = CallPhase.LIVE, canTalk = canTalk()) }
-            live(listOf(s), play = true)
+            live(listOf(s to session), play = true)
             "Call ended."
         }
         tone?.release()
@@ -375,17 +462,62 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
         }
     }
 
+    /** Someone asked to pair. Shows the code and waits for Accept; nothing is saved unless it's tapped. */
+    private suspend fun pairRequest(s: Socket, from: String, name: String, theirPub: ByteArray) {
+        val now = System.currentTimeMillis()
+        val last = pairAsked.put(from, now)
+        if (!idle() || busy() || (last != null && now - last < 30_000)) { send(s, JSONObject().put("status", "busy")); s.close(); return }
+        val keys = IntercomCrypto.newKeyPair()
+        val secret = IntercomCrypto.agree(keys, theirPub)
+        send(s, JSONObject().put("pub", keys.public.encoded.hex()))
+        val my = gen.incrementAndGet()
+        sockets = listOf(s)
+        _state.value = CallState(CallPhase.PAIRING, name, "wants to pair with this tablet. Accept only if both screens show this code.", code = IntercomCrypto.pairCode(secret))
+        withContext(Dispatchers.Main) { onRing() }
+        val outcome = runCatching {
+            if (!waitForTap(s, PAIR_MS) { _, _ -> false }) return@runCatching "Pairing with $name timed out."
+            savePair(from, name, IntercomCrypto.pairKey(secret))
+            s.getOutputStream().write("accept\n".toByteArray())
+            "Paired with $name."
+        }
+        end(my, outcome.getOrElse { "Pairing with $name was cancelled." })
+    }
+
+    /**
+     * Waits for answer() up to [limit] ms. The other side sends nothing meanwhile, so a short read only ever times
+     * out or sees it hang up (false). [tick] runs every 200 ms with the elapsed time and true every 2 s; returning
+     * true answers.
+     */
+    private fun waitForTap(s: Socket, limit: Int, tick: (Long, Boolean) -> Boolean): Boolean {
+        val tapped = java.util.concurrent.atomic.AtomicBoolean(false)
+        answer = { tapped.set(true) }
+        val input = s.getInputStream()
+        s.soTimeout = 200
+        val start = System.currentTimeMillis()
+        var rung = 0L
+        while (!tapped.get()) {
+            val now = System.currentTimeMillis()
+            if (now - start > limit) return false
+            val ring = now - rung > 2_000
+            if (ring) rung = now
+            if (tick(now - start, ring)) return true
+            val r = try { input.read() } catch (_: SocketTimeoutException) { 0 }
+            if (r < 0) return false
+        }
+        return true
+    }
+
     private fun chime() = runCatching {
         ToneGenerator(AudioManager.STREAM_MUSIC, 80).apply { startTone(ToneGenerator.TONE_PROP_BEEP2, 400); Thread.sleep(450); release() }
     }
 
     /**
-     * Plays what comes in ([play]) and sends the mic to every socket while the talk button is held, until each socket
-     * closes or hangup() closes them.
+     * Plays what comes in ([play]) and sends the mic, sealed per call, to every socket while the talk button is held,
+     * until each socket closes or hangup() closes them.
      */
     @SuppressLint("MissingPermission") // canTalk() checks it
-    private suspend fun live(socks: List<Socket>, play: Boolean) = withContext(Dispatchers.IO) {
-        val outs = socks.map { it.getOutputStream() }.toMutableList()
+    private suspend fun live(calls: List<Pair<Socket, AudioSession>>, play: Boolean) = withContext(Dispatchers.IO) {
+        val outs = calls.map { (s, session) -> s.getOutputStream() to session }.toMutableList()
         val track = if (!play) null else AudioTrack(
             AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build(),
             AudioFormat.Builder().setSampleRate(RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build(),
@@ -398,11 +530,15 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
             try {
                 if (mic.state != AudioRecord.STATE_INITIALIZED) { _state.update { it?.copy(canTalk = false) }; return@launch }
                 mic.startRecording()
-                val buf = ByteArray(640) // 20 ms
+                val frame = ByteArray(FRAME) // 20 ms, always whole: the sealed size on the wire is fixed
                 while (isActive) {
-                    val n = mic.read(buf, 0, buf.size)
-                    if (n < 0) { settings.micBroken = true; _state.update { it?.copy(canTalk = false) }; break } // see Settings.micBroken
-                    if (n > 0 && talking) outs.removeAll { o -> runCatching { o.write(buf, 0, n) }.isFailure }
+                    var got = 0
+                    while (got < FRAME) {
+                        val n = mic.read(frame, got, FRAME - got)
+                        if (n < 0) { settings.micBroken = true; _state.update { it?.copy(canTalk = false) }; return@launch } // see Settings.micBroken
+                        got += n
+                    }
+                    if (talking) outs.removeAll { (o, session) -> runCatching { o.write(session.seal(frame)) }.isFailure }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "mic: $e")
@@ -412,14 +548,15 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
         }
         try {
             track?.play()
-            socks.map { s ->
+            calls.map { (s, session) ->
                 launch {
                     runCatching {
                         val input = DataInputStream(s.getInputStream())
-                        val buf = ByteArray(640) // whole frames: TCP can split a sample across reads
+                        val sealed = ByteArray(AudioSession.SEALED)
                         while (true) {
-                            input.readFully(buf)
-                            track?.write(buf, 0, buf.size)
+                            input.readFully(sealed)
+                            val pcm = session.open(sealed) // throws on tampering, which ends the call
+                            track?.write(pcm, 0, pcm.size)
                         }
                     }
                 }
@@ -447,7 +584,9 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
         const val PORT = 47_811
         const val BEACON_PORT = 47_812
         private const val RATE = 16_000
+        private const val FRAME = 640
         private const val RING_MS = 30_000
+        private const val PAIR_MS = 60_000
         private const val AUTO_ANSWER_MS = 3_000L
         private const val PEER_TTL_MS = 10_000L
     }
@@ -462,7 +601,10 @@ fun IntercomOverlay(s: CallState, intercom: Intercom) {
             Modifier.padding(24.dp).widthIn(max = 480.dp).fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(CardBg).padding(28.dp),
             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Icon(if (s.announce) Icons.Rounded.Campaign else Icons.Rounded.Call, null, tint = Amber, modifier = Modifier.size(40.dp))
+            Icon(
+                when { s.phase == CallPhase.PAIRING -> Icons.Rounded.Link; s.announce -> Icons.Rounded.Campaign; else -> Icons.Rounded.Call },
+                null, tint = Amber, modifier = Modifier.size(40.dp),
+            )
             Text(s.peer, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
             val note = when {
                 s.phase != CallPhase.LIVE -> s.note
@@ -471,8 +613,14 @@ fun IntercomOverlay(s: CallState, intercom: Intercom) {
                 s.talking -> if (s.announce) s.note else "Talking…"
                 else -> if (s.announce) s.note + ". Hold the button to talk." else "Hold the button to talk."
             }
-            Text(note, color = TextDim, fontSize = 16.sp)
+            Text(note, color = TextDim, fontSize = 16.sp, textAlign = TextAlign.Center)
+            if (s.code.isNotEmpty()) Text(s.code, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
             when (s.phase) {
+                CallPhase.PAIRING -> if (s.outgoing) Button(intercom::hangup, colors = ButtonDefaults.buttonColors(containerColor = red)) { Text("CANCEL") }
+                else Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Button(intercom::hangup, colors = ButtonDefaults.buttonColors(containerColor = red)) { Text("DECLINE") }
+                    Button(intercom::answer, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF81C784))) { Text("ACCEPT") }
+                }
                 CallPhase.RINGING -> Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Button(intercom::hangup, colors = ButtonDefaults.buttonColors(containerColor = red)) { Text("DECLINE") }
                     Button(intercom::answer, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF81C784))) { Text("ANSWER") }
@@ -513,19 +661,30 @@ private fun PickerRow(icon: ImageVector, label: String, sub: String?, onClick: (
     }
 }
 
-/** The header's intercom button opens this: Announce to all, then every tablet currently taking calls. */
+/**
+ * The header's intercom button opens this: Announce to all, every paired tablet that's on, then tablets nearby that
+ * aren't paired yet with a Pair button.
+ */
 @Composable
-fun IntercomPicker(peers: List<Peer>, canAnnounce: Boolean, onPick: (Peer) -> Unit, onAnnounce: () -> Unit, onDismiss: () -> Unit) {
+fun IntercomPicker(
+    peers: List<Peer>, paired: Set<String>, canAnnounce: Boolean,
+    onCall: (Peer) -> Unit, onPair: (Peer) -> Unit, onAnnounce: () -> Unit, onDismiss: () -> Unit,
+) {
+    val (mine, nearby) = peers.partition { it.id in paired }
     AlertDialog(
         onDismissRequest = onDismiss, containerColor = CardBg,
         title = { Text("Intercom", color = Color.White) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (peers.isEmpty()) Text("Looking for tablets… Turn on Receive calls on another tablet to see it here.", color = TextDim, fontSize = 15.sp)
-                else if (canAnnounce) PickerRow(Icons.Rounded.Campaign, "Announce to all", "One way, to every tablet taking calls", onAnnounce)
-                peers.forEach { p ->
+                if (mine.isNotEmpty() && canAnnounce) PickerRow(Icons.Rounded.Campaign, "Announce to all", "One way, to every paired tablet", onAnnounce)
+                mine.forEach { p ->
                     if (p.dnd) PickerRow(Icons.Rounded.DoNotDisturbOn, p.name, "Do not disturb", null)
-                    else PickerRow(Icons.Rounded.Call, p.name, null) { onPick(p) }
+                    else PickerRow(Icons.Rounded.Call, p.name, null) { onCall(p) }
+                }
+                if (nearby.isNotEmpty()) {
+                    Text("Nearby, not paired", color = TextDim, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp, start = 8.dp))
+                    nearby.forEach { p -> PickerRow(Icons.Rounded.Link, p.name, "Tap to pair. The other tablet has to accept.") { onPair(p) } }
                 }
             }
         },

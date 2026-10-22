@@ -498,8 +498,9 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, intercom: Inter
     if (dialing) {
         val peers by intercom.peers.collectAsStateWithLifecycle()
         IntercomPicker(
-            peers, canAnnounce = intercom.canTalk(),
-            onPick = { dialing = false; intercom.call(it) }, onAnnounce = { dialing = false; intercom.announce() }, onDismiss = { dialing = false },
+            peers, parsePairs(settings.intercomPairs).keys, canAnnounce = intercom.canTalk(),
+            onCall = { dialing = false; intercom.call(it) }, onPair = { dialing = false; intercom.pair(it) },
+            onAnnounce = { dialing = false; intercom.announce() }, onDismiss = { dialing = false },
         )
     }
 

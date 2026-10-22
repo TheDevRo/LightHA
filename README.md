@@ -32,11 +32,13 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
   - Some old ROMs crash Android's audio service whenever the mic records (LineageOS 14.1 on the Fire HD 6 does). LightHA notices, switches the mic off, and says so in Settings.
 - **Intercom** (Settings → Intercom): tablets call each other on your network, with no server and no HA in the path.
   - **Make calls** and **Receive calls** are separate. A tablet with only Make calls on never opens a port or shows up on other tablets, so it can't be called.
-  - The phone button in the header lists every tablet taking calls, plus **Announce to all** (one way, to every tablet at once). Hold the big button to talk.
+  - **Pairing:** tablets see each other, but only paired tablets can call or announce. Tap a nearby tablet to pair, then accept on the other one once both screens show the same 6-digit code. Remove a pairing any time in Settings.
+  - **Encrypted:** pairing is an ECDH key exchange, so the pair key never crosses the network. Every call starts with both tablets proving they hold that key, and the audio is AES-GCM encrypted with a fresh key per call. Unpaired tablets are refused before anything rings.
+  - The phone button in the header lists paired tablets, then **Announce to all** (one way, to every paired tablet at once), then nearby tablets to pair with. Hold the big button to talk.
   - Calls ring with Answer and Decline, or **answer automatically** after a chime and a 3 second countdown. Nothing is sent from a tablet until its talk button is held.
   - **Do not disturb:** on, off, or on a schedule (for example 22:00 until 07:00). Callers see it in their list.
   - The wake word pauses for the whole call, and a call that comes in during an Assist turn gets "busy", so the voice assistant and the intercom never fight over the mic.
-  - **From Home Assistant** (needs Sensors on): the tablet reports `sensor.<tablet>_intercom` (`idle`, `calling`, `ringing`, `in_call`, `announcing`, `listening`, `missed`), `sensor.<tablet>_intercom_peer` and `binary_sensor.<tablet>_intercom_do_not_disturb`. Send commands with its notify action:
+  - **From Home Assistant** (needs Sensors on): the tablet reports `sensor.<tablet>_intercom` (`idle`, `pairing`, `calling`, `ringing`, `in_call`, `announcing`, `listening`, `missed`), `sensor.<tablet>_intercom_peer` and `binary_sensor.<tablet>_intercom_do_not_disturb`. Send commands with its notify action:
 
     ```yaml
     action: notify.mobile_app_<tablet>
@@ -132,7 +134,7 @@ Live camera video · map tiles · cards built from JavaScript templates (`button
 | `Settings.kt`, `SettingsScreen.kt` | on-tablet settings |
 | `MobileApp.kt` | `mobile_app` registration and sensor reports (battery, charger, camera motion) |
 | `Voice.kt` | push-to-talk Assist over the WebSocket, reply overlay and playback |
-| `Intercom.kt` | tablet-to-tablet calls and announcements: UDP beacon discovery, TCP audio, call screen |
+| `Intercom.kt`, `IntercomCrypto.kt` | tablet-to-tablet calls and announcements: UDP beacon discovery, pairing, authenticated and encrypted TCP audio, call screen |
 | `WakeWord.kt`, `cpp/` | on-tablet wake word: JNI wrapper and the native microWakeWord engine (Apache-2.0, see `cpp/NOTICE`) |
 
 The pure logic is covered by JVM unit tests: `./gradlew testDebugUnitTest`.

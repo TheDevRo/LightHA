@@ -59,6 +59,10 @@ class Settings(private val prefs: SharedPreferences) {
     var intercomDnd by int("intercom_dnd", 0)
     var intercomDndFrom by int("intercom_dnd_from", 22)
     var intercomDndTo by int("intercom_dnd_to", 7)
+    /** This tablet's intercom id, made on first use. Paired tablets know it by this. */
+    var intercomId by string("intercom_id", "")
+    /** Paired tablets as JSON: `{id: {name, key}}`, key in hex. Only these can call or be called. */
+    var intercomPairs by string("intercom_pairs", "{}")
     /** What other tablets see in their call list. */
     var intercomName by string("intercom_name", android.os.Build.MODEL)
     /** Empty = no PIN. */

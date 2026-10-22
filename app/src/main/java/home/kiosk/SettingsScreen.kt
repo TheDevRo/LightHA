@@ -296,10 +296,23 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                         singleLine = true, modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                val pairs = parsePairs(settings.intercomPairs)
+                if (pairs.isNotEmpty()) {
+                    Text("Paired tablets", color = Color.White, fontSize = 15.sp)
+                    pairs.values.sortedBy { it.name }.forEach { p ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(p.name, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                            TextButton(onClick = {
+                                settings.intercomPairs = org.json.JSONObject(settings.intercomPairs).apply { remove(p.id) }.toString()
+                            }) { Text("REMOVE") }
+                        }
+                    }
+                }
                 Text(
-                    "Make calls puts a call button in the header that lists every tablet with Receive calls on. " +
-                        "Receive calls makes this tablet ring when called. With it off nobody can call this tablet. " +
-                        "Hold the button to talk. Calls go straight between tablets on your network, and the wake word pauses during a call.",
+                    "Make calls puts a call button in the header. It lists every tablet with Receive calls on, but only paired ones can be called: " +
+                        "tap Pair, then accept on the other tablet once both screens show the same code. Receive calls makes this tablet ring when " +
+                        "a paired tablet calls. With it off nobody can call this tablet. Hold the button to talk. Calls go straight between tablets " +
+                        "on your network, encrypted, and the wake word pauses during a call.",
                     color = TextDim, fontSize = 13.sp,
                 )
                 if (settings.intercomCall || settings.intercomReceive) Text(
