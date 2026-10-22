@@ -184,7 +184,7 @@ class MainActivity : ComponentActivity() {
             while (true) {
                 @Suppress("DEPRECATION") val rssi = wifi.connectionInfo?.rssi ?: -127
                 report(*listOfNotNull(
-                    Sensor("wifi_signal", "Wi-Fi signal", rssi, "signal_strength", "dBm").takeIf { rssi > -127 }, // -127 = not connected
+                    Sensor("wifi_signal", "Wifi signal", rssi, "signal_strength", "dBm").takeIf { rssi > -127 }, // -127 = not connected
                     lux?.let { Sensor("light", "Light", Math.round(it), "illuminance", "lx") },
                     Runtime.getRuntime().let { Sensor("app_memory", "App memory", (it.totalMemory() - it.freeMemory() + Debug.getNativeHeapAllocatedSize()) shr 20, "data_size", "MB") },
                 ).toTypedArray())
