@@ -17,7 +17,7 @@ import java.io.Closeable
 import java.nio.ByteBuffer
 
 /** Wake words bundled in assets/wakeword (id to spoken name). */
-val WAKE_WORDS = listOf("okay_nabu" to "Okay Nabu", "hey_jarvis" to "Hey Jarvis", "hey_mycroft" to "Hey Mycroft", "hey_luna" to "Hey Luna")
+val WAKE_WORDS = listOf("okay_nabu" to "Okay Nabu", "hey_jarvis" to "Hey Jarvis", "hey_mycroft" to "Hey Mycroft")
 
 /** True while the tablet's mic is open for the wake word. */
 val wakeListening = MutableStateFlow(false)

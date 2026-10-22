@@ -4,9 +4,6 @@ LightHA is MIT licensed (see LICENSE). It bundles these third-party files under 
   (https://github.com/jxlarrea/voice-satellite-card-integration, custom_components/voice_satellite/sounds/wake.mp3),
   unmodified, licensed AGPL-3.0. Its source is that repository.
 
-- app/src/main/assets/wakeword/hey_luna.tflite and .json: the Hey Luna microWakeWord model by Tater Totterson
-  (https://github.com/TaterTotterson/Tater-Wake-Words, microWakeWordsV6).
-
 - app/src/main/cpp: the microWakeWord engine from the Home Assistant Android app, Apache-2.0 (see app/src/main/cpp/NOTICE).
 
 - The Okay Nabu, Hey Jarvis and Hey Mycroft models: see the author fields in app/src/main/assets/wakeword/*.json.
