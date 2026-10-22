@@ -22,11 +22,13 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
 - **Kiosk mode** (Settings → Kiosk):
   - **Use as home screen:** the Home button and reboots open the dashboard.
   - **Start after reboot:** for when you don't use home-screen mode.
-  - **Screensaver:** after a set idle time, a black screen with a dim clock that moves every minute to avoid burn-in, at its own low brightness. Any tap wakes it.
+  - **Screensaver:** after a set idle time, at its own brightness. Choose a dim clock that moves every minute to avoid burn-in, the clock with current weather, or any web page full screen (ImmichFrame or another photo frame). Any tap wakes it.
   - **Screen follows an entity:** pick any HA entity (motion, a room's lights, someone home). The screen wakes when it turns on and sleeps when it turns off, including under Android's own screensaver (for example ImmichFrame).
   - **Wake on camera motion:** the tablet's camera compares tiny grayscale snapshots once a second (nothing is saved or sent). Motion wakes the screen, and with **Sensors** on it's reported to HA as a camera motion sensor.
 - **Sensors** (Settings → Sensors): the tablet registers as a device through HA's `mobile_app` integration, like the Companion app, and reports battery level, charger plugged in, battery temperature, camera motion (front or back camera), screen (`on`, `screensaver`, `off`), Wi-Fi signal, light level (on tablets with a light sensor), the current view, app memory and when the app started. Works with any account.
   - **Commands** through `notify.mobile_app_<tablet>`, named like the Companion app's so existing automations work: `command_screen_on`, `command_screensaver`, `command_screen_brightness_level` (`data: {command: 0-255}`, or `auto`), `command_webview` (`data: {command: /lovelace/kitchen}`, opens that view) and `command_reload`.
+  - **Speak on the tablet:** `message: TTS` with `data: {tts_text: "The washer is done"}`, as with the Companion app. It's spoken in your Assist pipeline's voice and shown in the voice bubble.
+  - **Voice timers:** with Sensors on, "set a 10 minute timer" works. HA keeps the timer, and when it finishes the tablet wakes, rings and shows it with a Stop button. Tablets registered before 0.6.0 need one HA restart first, so HA picks up their push channel.
 - **Voice** (Settings → Voice):
   - **Assist button:** tap the mic in the header and talk. HA's Assist pipeline (pick one, or use your default) hears when you stop, the answer shows on screen, and the reply is spoken.
   - **Wake word:** Okay Nabu, Hey Jarvis or Hey Mycroft, detected on the tablet with [microWakeWord](https://github.com/OHF-Voice/micro-wake-word) (the engine from the HA Companion app). No audio leaves the tablet until the word is heard. The header mic turns amber while it's listening. Sensitivity is adjustable.

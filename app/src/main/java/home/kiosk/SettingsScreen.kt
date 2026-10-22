@@ -179,9 +179,32 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                     settings.screensaverMinutes = it
                 }
                 if (settings.screensaverMinutes > 0) {
+                    Text("Screensaver shows", color = Color.White, fontSize = 15.sp)
+                    Choices(listOf(0 to "Clock", 1 to "Clock and weather", 2 to "Web page"), settings.screensaverStyle) {
+                        // Photos are lost at the clock's dim default.
+                        if (it == 2 && settings.screensaverBrightness < 0.3f) settings.screensaverBrightness = 0.6f
+                        settings.screensaverStyle = it
+                    }
+                    if (settings.screensaverStyle == 1) {
+                        var pickingWeather by remember { mutableStateOf(false) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(states[settings.screensaverWeather]?.name ?: "First weather entity", color = TextDim, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                            OutlinedButton(onClick = { pickingWeather = true }) { Text("Choose") }
+                        }
+                        if (pickingWeather) EntityPicker(
+                            states.filterValues { it.domain == "weather" },
+                            onPick = { settings.screensaverWeather = it; pickingWeather = false }, onDismiss = { pickingWeather = false },
+                        )
+                    }
+                    if (settings.screensaverStyle == 2) {
+                        OutlinedTextField(settings.screensaverUrl, { settings.screensaverUrl = it.trim() }, label = { Text("Page URL") },
+                            placeholder = { Text("http://photo-frame.local:8080") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                        Text("Any web page, like ImmichFrame or another photo frame. A tap still wakes the dashboard.", color = TextDim, fontSize = 13.sp)
+                    }
                     Text("Screensaver brightness", color = Color.White, fontSize = 15.sp)
                     Slider(
-                        settings.screensaverBrightness, { settings.screensaverBrightness = it }, valueRange = 0.01f..0.5f,
+                        settings.screensaverBrightness, { settings.screensaverBrightness = it }, valueRange = 0.01f..1f,
                         colors = SliderDefaults.colors(thumbColor = Amber, activeTrackColor = Amber, inactiveTrackColor = Chip),
                     )
                 }

@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -137,6 +138,8 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
                 put("end_stage", "tts")
                 put("input", JSONObject().put("sample_rate", RATE))
                 if (pipeline.isNotEmpty()) put("pipeline", pipeline)
+                // Lets HA's timers ("set a 10 minute timer") ring on this tablet; see MobileApp.deviceIdFor.
+                settings.mobileDeviceId.takeIf { it.isNotEmpty() }?.let { put("device_id", it) }
             }, once = true) { e -> _state.update { it?.let { s -> voiceStep(s, e) } } }
             var mic: AudioRecord? = null
             try {
@@ -175,6 +178,39 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
             } finally {
                 mic?.release()
                 sub.cancel()
+            }
+        }
+    }
+
+    /**
+     * Says [text] in the pipeline's voice and shows it in the bubble: HA's `TTS` notify message, as the Companion app
+     * takes it. Skipped while a turn is running; a turn started meanwhile cuts it off.
+     */
+    fun say(text: String, pipeline: String) {
+        if (_state.value != null || text.isBlank()) return
+        val mine = VoiceState(phase = VoicePhase.SPEAKING, reply = text)
+        _state.value = mine
+        job = scope.launch {
+            val url = CompletableDeferred<String?>()
+            val sub = ha.subscribe("assist_pipeline/run", {
+                put("start_stage", "tts")
+                put("end_stage", "tts")
+                put("input", JSONObject().put("text", text))
+                if (pipeline.isNotEmpty()) put("pipeline", pipeline)
+            }, once = true) { e ->
+                when (e.optString("type")) {
+                    "tts-end" -> url.complete(e.optJSONObject("data")?.optJSONObject("tts_output")?.optString("url"))
+                    "error", "run-end" -> url.complete(null)
+                }
+            }
+            try {
+                withTimeoutOrNull(15_000) { url.await() }?.takeIf { it.isNotEmpty() }?.let {
+                    withTimeoutOrNull(PLAY_MS) { play(if (it.startsWith("http")) it else baseUrl.trimEnd('/') + it) }
+                }
+                delay(2_000)
+            } finally {
+                sub.cancel()
+                _state.compareAndSet(mine, null) // a turn that cut in keeps its bubble
             }
         }
     }

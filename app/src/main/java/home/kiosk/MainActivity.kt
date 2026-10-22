@@ -14,6 +14,12 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.net.wifi.WifiManager
 import android.os.Bundle
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material.icons.rounded.Timer
+import android.media.RingtoneManager
+import android.media.AudioAttributes
 import android.os.Debug
 import android.os.SystemClock
 import android.os.PowerManager
@@ -112,7 +118,7 @@ class MainActivity : ComponentActivity() {
 
         val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope, settings.haRefresh).also { this.ha = it }
         val lovelace = Lovelace(ha, lifecycleScope, prefs, java.io.File(filesDir, "gallery.json").takeIf { BuildConfig.DEBUG })
-        val voice = Voice(ha, settings.haUrl, lifecycleScope, settings, chime = ::chime)
+        val voice = Voice(ha, settings.haUrl, lifecycleScope, settings, chime = ::chime).also { this.voice = it }
         // An Assist turn holds the mic, so a call coming in then gets "busy".
         val intercom = Intercom(this, lifecycleScope, settings, busy = { voice.state.value != null }, onRing = ::wakeScreen).also { this.intercom = it }
         lifecycleScope.launch { snapshotFlow { settings.intercomCall to settings.intercomReceive }.collect { intercom.apply(it.first, it.second) } }
@@ -212,6 +218,8 @@ class MainActivity : ComponentActivity() {
                         // Above everything, Settings included, so a call is never missed behind a screen.
                         val call by intercom.state.collectAsStateWithLifecycle()
                         call?.let { IntercomOverlay(it, intercom) }
+                        val timer by timerAlert.collectAsStateWithLifecycle()
+                        timer?.let { TimerAlert(it, onStop = ::stopTimer) }
                     }
                 }
             }
@@ -219,6 +227,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        stopTimer()
         wake?.stop()
         intercom?.apply(call = false, receive = false)
         unregisterReceiver(battery)
@@ -275,7 +284,10 @@ class MainActivity : ComponentActivity() {
             "command_screensaver", "command_webview" -> commands.tryEmit(message to data)
             "command_screen_brightness_level" -> settings.brightness = data.optString("command").toIntOrNull()?.let { (it / 255f).coerceIn(0.05f, 1f) } ?: -1f
             "command_reload" -> recreate()
+            "TTS" -> voice?.say(data.optString("tts_text"), settings.voicePipeline)
         }
+        // HA's own "timer finished" notification for timers started by voice on this tablet.
+        if (data.optString("group") == "timers") ringTimer(timerText(message))
         val ic = intercom ?: return
         when (message) {
             "intercom_call" -> if (!ic.callByName(data.optString("kiosk"))) Log.w("Intercom", "HA asked to call '${data.optString("kiosk")}': not found or busy")
@@ -285,6 +297,33 @@ class MainActivity : ComponentActivity() {
             "intercom_dnd_off" -> settings.intercomDnd = 0
         }
     }
+
+    private var voice: Voice? = null
+
+    /** The finished timer on screen ("10:00:00 timer finished"); null when none is ringing. */
+    private val timerAlert = MutableStateFlow<String?>(null)
+    private var ringing: Job? = null
+
+    /** Wakes the screen and rings the alarm sound until Stop, or for two minutes. */
+    private fun ringTimer(message: String) {
+        wakeScreen()
+        timerAlert.value = message
+        ringing?.cancel()
+        ringing = lifecycleScope.launch {
+            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val tone = RingtoneManager.getRingtone(this@MainActivity, uri)?.apply {
+                audioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build()
+            }
+            try {
+                withTimeoutOrNull(120_000) { while (true) { if (tone?.isPlaying == false) tone.play(); delay(1_000) } } // no setLooping before API 28
+            } finally {
+                tone?.stop()
+                timerAlert.value = null
+            }
+        }
+    }
+
+    private fun stopTimer() { ringing?.cancel() }
 
     private fun minuteTicks() = kotlinx.coroutines.flow.flow { while (true) { emit(Unit); delay(60_000) } }
     private var intercom: Intercom? = null
@@ -569,7 +608,12 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, intercom: Inter
         }
     }
 
-    if (saver) Screensaver(onWake = { saver = false; lastTouch[0] = System.currentTimeMillis() })
+    if (saver) Screensaver(
+        settings.screensaverStyle,
+        settings.screensaverUrl.let { if (it.startsWith("/")) settings.haUrl.trimEnd('/') + it else it },
+        states[settings.screensaverWeather] ?: states.values.filter { it.domain == "weather" }.let { w -> w.firstOrNull { it.state !in setOf("unavailable", "unknown") } ?: w.firstOrNull() },
+        onWake = { saver = false; lastTouch[0] = System.currentTimeMillis() },
+    )
 
     val talking by voice.state.collectAsStateWithLifecycle()
     val level by voice.level.collectAsStateWithLifecycle()
@@ -690,4 +734,27 @@ private fun Section(cards: List<JSONObject>, ctx: CardContext, edit: SectionEdit
             Text(" Add card", fontWeight = FontWeight.Medium)
         }
     }
+}
+
+/** A finished Assist timer: [message] from HA and a big Stop. Sits above everything, like a call. */
+@Composable
+private fun TimerAlert(message: String, onStop: () -> Unit) {
+    Box(Modifier.fillMaxSize().background(Color(0xCC000000)).pointerInput(Unit) { detectTapGestures {} }, contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.padding(24.dp).clip(RoundedCornerShape(28.dp)).background(CardBg).padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Icon(Icons.Rounded.Timer, null, tint = Amber, modifier = Modifier.size(48.dp))
+            Text(message, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
+            Button(onStop) { Text("STOP", fontSize = 18.sp) }
+        }
+    }
+}
+
+/** HA says "0:10:00 timer finished"; show "10 minute timer finished". Named timers ("Pasta finished") pass through. */
+fun timerText(message: String): String {
+    val m = Regex("""^(\d+):(\d\d):(\d\d) timer finished$""").find(message) ?: return message
+    val (h, min, sec) = m.destructured.toList().map { it.toInt() }
+    val parts = listOf(h to "hour", min to "minute", sec to "second").filter { it.first > 0 }.joinToString(" ") { "${it.first} ${it.second}" }
+    return "${parts.ifEmpty { "0 second" }} timer finished"
 }

@@ -55,6 +55,9 @@ class MobileApp(private val ha: HaClient, private val settings: Settings) {
         if (settings.mobileWebhook.isEmpty()) registerDevice()
         sensors.filter { it.id !in registered }.forEach { webhook("register_sensor", it.registration()); registered += it.id }
         val reply = webhook("update_sensor_states", JSONArray(sensors.map { it.update() }))
+        if (settings.mobileDeviceId.isEmpty() && registered.isNotEmpty()) runCatching {
+            settings.mobileDeviceId = deviceIdFor(ha.request("config/entity_registry/list") as JSONArray, settings.mobileWebhook).orEmpty()
+        }
         if (!retried && needsRegistering(reply)) {
             if (reply.isBlank()) settings.mobileWebhook = "" // device deleted in HA, or a different server: start over
             registered.clear()
@@ -85,6 +88,7 @@ class MobileApp(private val ha: HaClient, private val settings: Settings) {
         val body = device().put("device_id", UUID.randomUUID().toString()).put("app_id", BuildConfig.APPLICATION_ID)
             .put("app_name", "LightHA").put("os_name", "Android").put("supports_encryption", false)
         settings.mobileWebhook = JSONObject(ha.postJson("/api/mobile_app/registrations", body)).getString("webhook_id")
+        settings.mobileDeviceId = ""
         registered.clear()
     }
 
@@ -96,6 +100,12 @@ class MobileApp(private val ha: HaClient, private val settings: Settings) {
     }
 
     companion object {
+        /** The device behind this tablet's sensors: mobile_app prefixes each sensor's unique_id with the webhook id. */
+        fun deviceIdFor(entities: JSONArray, webhook: String): String? = (0 until entities.length())
+            .map { entities.getJSONObject(it) }
+            .firstOrNull { it.optString("unique_id").startsWith(webhook + "_") && !it.isNull("device_id") }
+            ?.optString("device_id")
+
         /** True when HA no longer knows the webhook (blank reply) or one of the sensors (not_registered). */
         fun needsRegistering(reply: String): Boolean {
             if (reply.isBlank()) return true
