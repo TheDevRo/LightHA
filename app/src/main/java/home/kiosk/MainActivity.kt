@@ -9,7 +9,12 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import android.media.MediaPlayer
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.net.wifi.WifiManager
 import android.os.Bundle
+import android.os.Debug
 import android.os.SystemClock
 import android.os.PowerManager
 import android.view.WindowManager
@@ -86,6 +91,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -152,7 +159,7 @@ class MainActivity : ComponentActivity() {
                     applyWindow()
                 }
         }
-        lifecycleScope.launch { snapshotFlow { settings.cameraMotion }.collect { applyMotion() } }
+        lifecycleScope.launch { snapshotFlow { settings.cameraMotion to settings.motionCamera }.collect { applyMotion() } }
 
         // Sensors go to HA when switched on; everything known so far is resent after each (re)connect.
         mobile = MobileApp(ha, settings)
@@ -162,10 +169,32 @@ class MainActivity : ComponentActivity() {
                 .collect { if (it) send(sensors.values.toList()) }
         }
         registerReceiver(battery, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-
-        // HA controls the intercom through notify.mobile_app_<tablet>; needs the mobile_app device (Sensors on).
+        registerReceiver(screen, IntentFilter().apply {
+            listOf(Intent.ACTION_SCREEN_ON, Intent.ACTION_SCREEN_OFF, Intent.ACTION_DREAMING_STARTED, Intent.ACTION_DREAMING_STOPPED).forEach(::addAction)
+        })
+        (getSystemService(SENSOR_SERVICE) as SensorManager).run {
+            getDefaultSensor(android.hardware.Sensor.TYPE_LIGHT)?.let { registerListener(light, it, SensorManager.SENSOR_DELAY_NORMAL) }
+        }
+        lifecycleScope.launch { view.collect { if (it.isNotEmpty()) report(Sensor("view", "Dashboard view", it)) } }
+        // Values that drift: checked once a minute, sent only when they changed.
         lifecycleScope.launch {
-            combine(ha.status, snapshotFlow { settings.reportSensors }, intercomOn) { s, sensors, on -> s == Status.CONNECTED && sensors && on }
+            val iso = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZZZZZ", java.util.Locale.US)
+            report(Sensor("app_started", "App started", iso.format(java.util.Date()), "timestamp"))
+            val wifi = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+            while (true) {
+                @Suppress("DEPRECATION") val rssi = wifi.connectionInfo?.rssi ?: -127
+                report(*listOfNotNull(
+                    Sensor("wifi_signal", "Wi-Fi signal", rssi, "signal_strength", "dBm").takeIf { rssi > -127 }, // -127 = not connected
+                    lux?.let { Sensor("light", "Light", Math.round(it), "illuminance", "lx") },
+                    Runtime.getRuntime().let { Sensor("app_memory", "App memory", (it.totalMemory() - it.freeMemory() + Debug.getNativeHeapAllocatedSize()) shr 20, "data_size", "MB") },
+                ).toTypedArray())
+                delay(60_000)
+            }
+        }
+
+        // HA controls the tablet and intercom through notify.mobile_app_<tablet>; needs the mobile_app device (Sensors on).
+        lifecycleScope.launch {
+            combine(ha.status, snapshotFlow { settings.reportSensors }) { s, sensors -> s == Status.CONNECTED && sensors }
                 .distinctUntilChanged()
                 .collectLatest { on ->
                     if (!on) return@collectLatest
@@ -193,6 +222,8 @@ class MainActivity : ComponentActivity() {
         wake?.stop()
         intercom?.apply(call = false, receive = false)
         unregisterReceiver(battery)
+        unregisterReceiver(screen)
+        (getSystemService(SENSOR_SERVICE) as SensorManager).unregisterListener(light)
         motion?.stop()
         ha?.stop()
         super.onDestroy()
@@ -216,7 +247,7 @@ class MainActivity : ComponentActivity() {
         motion = null
         val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (settings.cameraMotion) reportMotion(false)
-        if (settings.cameraMotion && granted) motion = CameraMotion({ settings.motionSensitivity / 100f }, ::onMotion).takeIf { it.start() }
+        if (settings.cameraMotion && granted) motion = CameraMotion(settings.motionCamera, { settings.motionSensitivity / 100f }, ::onMotion).takeIf { it.start() }
     }
 
     /** Wake, then report binary_sensor.kiosk_<device>_motion to HA: on now, off after a quiet minute. */
@@ -232,7 +263,19 @@ class MainActivity : ComponentActivity() {
 
     private var wake: WakeWordListener? = null
 
+    /** Commands from HA that the dashboard carries out (screensaver, screen on, open a view): message and data. */
+    val commands = MutableSharedFlow<Pair<String, JSONObject>>(extraBufferCapacity = 8)
+    /** The view on screen, as its path or index, for the view sensor. */
+    val view = MutableStateFlow("")
+
     private fun onPush(message: String, data: JSONObject) {
+        // Named like the Companion app's commands, so automations written for it work here too.
+        when (message) {
+            "command_screen_on" -> { wakeScreen(); commands.tryEmit(message to data) }
+            "command_screensaver", "command_webview" -> commands.tryEmit(message to data)
+            "command_screen_brightness_level" -> settings.brightness = data.optString("command").toIntOrNull()?.let { (it / 255f).coerceIn(0.05f, 1f) } ?: -1f
+            "command_reload" -> recreate()
+        }
         val ic = intercom ?: return
         when (message) {
             "intercom_call" -> if (!ic.callByName(data.optString("kiosk"))) Log.w("Intercom", "HA asked to call '${data.optString("kiosk")}': not found or busy")
@@ -256,8 +299,9 @@ class MainActivity : ComponentActivity() {
     private val sensors = mutableMapOf<String, Sensor>()
 
     private fun report(vararg changed: Sensor) {
-        changed.forEach { sensors[it.id] = it }
-        if (settings.reportSensors && ha?.status?.value == Status.CONNECTED) send(changed.toList())
+        val fresh = changed.filter { sensors[it.id] != it }
+        fresh.forEach { sensors[it.id] = it }
+        if (settings.reportSensors && ha?.status?.value == Status.CONNECTED) send(fresh)
     }
 
     private fun send(list: List<Sensor>) {
@@ -281,6 +325,31 @@ class MainActivity : ComponentActivity() {
 
     /** True while the screensaver is showing: it dims the screen to its own brightness. */
     var saverActive = false
+        set(v) { field = v; reportScreen() }
+    /** True while Android's own screensaver (daydream, e.g. ImmichFrame) covers the app. */
+    private var dreaming = false
+
+    private fun reportScreen() {
+        val on = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
+        report(Sensor("screen", "Screen", when { !on -> "off"; dreaming || saverActive -> "screensaver"; else -> "on" }))
+    }
+
+    private val screen = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_DREAMING_STARTED -> dreaming = true
+                Intent.ACTION_DREAMING_STOPPED -> dreaming = false
+            }
+            reportScreen()
+        }
+    }
+
+    /** Latest ambient light in lux; null on tablets without a light sensor. */
+    private var lux: Float? = null
+    private val light = object : SensorEventListener {
+        override fun onSensorChanged(e: SensorEvent) { lux = e.values[0] }
+        override fun onAccuracyChanged(s: android.hardware.Sensor, accuracy: Int) {}
+    }
 
     /** Screen-on, brightness and fullscreen from [Settings]. */
     fun applyWindow() {
@@ -401,6 +470,17 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, intercom: Inter
     fun openView(path: String) {
         val idx = cfg?.let { viewIndexFor(it, path) } ?: return
         if (idx in tabs) { subview = null; scope.launch { pager.animateScrollToPage(tabs.indexOf(idx)) } } else subview = idx
+    }
+
+    LaunchedEffect(currentView, views) { activity.view.value = views.getOrNull(currentView)?.let { viewKey(it, currentView) }.orEmpty() }
+    LaunchedEffect(cfg, tabs) {
+        activity.commands.collect { (message, data) ->
+            when (message) {
+                "command_screen_on" -> { saver = false; lastTouch[0] = System.currentTimeMillis() }
+                "command_screensaver" -> saver = true
+                "command_webview" -> { showSettings = false; openView(data.optString("command")) }
+            }
+        }
     }
 
     if (showSettings) {

@@ -207,6 +207,11 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 if (settings.cameraMotion) {
                     Text("Sensitivity", color = Color.White, fontSize = 15.sp)
                     Choices(listOf(15 to "Low", 6 to "Medium", 2 to "High"), settings.motionSensitivity) { settings.motionSensitivity = it }
+                    @Suppress("DEPRECATION") val cameras = remember { runCatching { android.hardware.Camera.getNumberOfCameras() }.getOrDefault(0) }
+                    if (cameras > 1) {
+                        Text("Camera", color = Color.White, fontSize = 15.sp)
+                        Choices(listOf(1 to "Front", 0 to "Back"), settings.motionCamera) { settings.motionCamera = it }
+                    }
                     Text(
                         "Compares tiny grayscale snapshots once a second. Nothing is saved or sent. Reported to Home Assistant when Sensors is on below.",
                         color = TextDim, fontSize = 13.sp,
@@ -217,7 +222,7 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
             Group("Sensors") {
                 Toggle("Report this tablet to Home Assistant", settings.reportSensors) { settings.reportSensors = it }
                 Text(
-                    "Adds a ${Build.MODEL} device in Home Assistant with battery level, charger and battery temperature, plus camera motion when that's on. Works with any account.",
+                    "Adds a ${Build.MODEL} device in Home Assistant with battery, charger, screen, Wi-Fi signal, light level, current view, app memory and start time, plus camera motion when that's on. Home Assistant can also wake the screen, start the screensaver, set brightness, open a view and reload. Works with any account.",
                     color = TextDim, fontSize = 13.sp,
                 )
             }
