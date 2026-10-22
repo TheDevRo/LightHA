@@ -62,11 +62,28 @@ class MobileApp(private val ha: HaClient, private val settings: Settings) {
         }
     }
 
+    /**
+     * Lets HA's notify.mobile_app_<tablet> action reach this tablet over the WebSocket (the intercom commands).
+     * Registers first if needed; older registrations get push support added. Call [listen] after this.
+     */
+    suspend fun enablePush() = lock.withLock {
+        if (settings.mobileWebhook.isEmpty()) registerDevice()
+        else webhook("update_registration", device())
+    }
+
+    /** HA's notify messages for this tablet: `message` and its `data`. Re-subscribes after reconnects. */
+    fun listen(onPush: (String, JSONObject) -> Unit) =
+        ha.subscribe("mobile_app/push_notification_channel", { put("webhook_id", settings.mobileWebhook) }) { e ->
+            onPush(e.optString("message"), e.optJSONObject("data") ?: JSONObject())
+        }
+
+    private fun device() = JSONObject().put("app_version", BuildConfig.VERSION_NAME)
+        .put("device_name", Build.MODEL).put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL).put("os_version", Build.VERSION.RELEASE)
+        .put("app_data", JSONObject().put("push_websocket_channel", true))
+
     private suspend fun registerDevice() {
-        val body = JSONObject().put("device_id", UUID.randomUUID().toString()).put("app_id", BuildConfig.APPLICATION_ID)
-            .put("app_name", "LightHA").put("app_version", BuildConfig.VERSION_NAME)
-            .put("device_name", Build.MODEL).put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL)
-            .put("os_name", "Android").put("os_version", Build.VERSION.RELEASE).put("supports_encryption", false)
+        val body = device().put("device_id", UUID.randomUUID().toString()).put("app_id", BuildConfig.APPLICATION_ID)
+            .put("app_name", "LightHA").put("os_name", "Android").put("supports_encryption", false)
         settings.mobileWebhook = JSONObject(ha.postJson("/api/mobile_app/registrations", body)).getString("webhook_id")
         registered.clear()
     }

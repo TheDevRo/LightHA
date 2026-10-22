@@ -51,6 +51,14 @@ class Settings(private val prefs: SharedPreferences) {
     var intercomCall by bool("intercom_call", false)
     /** Intercom: take calls. Opens the call port and announces this tablet on the LAN. Separate from [intercomCall]. */
     var intercomReceive by bool("intercom_receive", false)
+    /** Hear Announce to all from other tablets (needs [intercomReceive]). */
+    var intercomAnnouncements by bool("intercom_announcements", true)
+    /** Answer calls after a chime and a 3 second countdown. The mic still only sends while Talk is held. */
+    var intercomAutoAnswer by bool("intercom_auto_answer", false)
+    /** Do not disturb: 0 off, 1 on, 2 scheduled from [intercomDndFrom] to [intercomDndTo] o'clock. See [dndAt]. */
+    var intercomDnd by int("intercom_dnd", 0)
+    var intercomDndFrom by int("intercom_dnd_from", 22)
+    var intercomDndTo by int("intercom_dnd_to", 7)
     /** What other tablets see in their call list. */
     var intercomName by string("intercom_name", android.os.Build.MODEL)
     /** Empty = no PIN. */

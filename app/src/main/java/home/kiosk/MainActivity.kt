@@ -84,6 +84,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -108,6 +110,17 @@ class MainActivity : ComponentActivity() {
         // An Assist turn holds the mic, so a call coming in then gets "busy".
         val intercom = Intercom(this, lifecycleScope, settings, busy = { voice.state.value != null }, onRing = ::wakeScreen).also { this.intercom = it }
         lifecycleScope.launch { snapshotFlow { settings.intercomCall to settings.intercomReceive }.collect { intercom.apply(it.first, it.second) } }
+        val intercomOn = snapshotFlow { settings.intercomCall || settings.intercomReceive }
+        // Intercom state for HA automations (missed calls, who's calling, Do not disturb). Schedules flip on the hour.
+        lifecycleScope.launch {
+            combine(intercomOn, intercom.state) { on, s -> (haStatus(s) to s?.peer.orEmpty()).takeIf { on } }.distinctUntilChanged()
+                .collect { it?.let { (status, peer) -> report(Sensor("intercom", "Intercom", status), Sensor("intercom_peer", "Intercom peer", peer.ifEmpty { "none" })) } }
+        }
+        lifecycleScope.launch {
+            combine(intercomOn, snapshotFlow { Triple(settings.intercomDnd, settings.intercomDndFrom, settings.intercomDndTo) }, minuteTicks()) { on, _, _ ->
+                intercom.dnd().takeIf { on }
+            }.distinctUntilChanged().collect { it?.let { dnd -> report(Sensor("intercom_dnd", "Intercom do not disturb", dnd)) } }
+        }
 
         // Wake word: listens while no Assist turn or call is running, hands the mic over when it hears its word.
         wake = WakeWordListener(this, onMicBroken = { settings.micBroken = true }) { wakeScreen(); beep(); voice.start(settings.voicePipeline) }
@@ -151,6 +164,18 @@ class MainActivity : ComponentActivity() {
         }
         registerReceiver(battery, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
 
+        // HA controls the intercom through notify.mobile_app_<tablet>; needs the mobile_app device (Sensors on).
+        lifecycleScope.launch {
+            combine(ha.status, snapshotFlow { settings.reportSensors }, intercomOn) { s, sensors, on -> s == Status.CONNECTED && sensors && on }
+                .distinctUntilChanged()
+                .collectLatest { on ->
+                    if (!on) return@collectLatest
+                    runCatching { mobile?.enablePush() }.onFailure { Log.w("MobileApp", "push setup failed: $it"); return@collectLatest }
+                    val sub = mobile?.listen { message, data -> lifecycleScope.launch { onPush(message, data) } }
+                    try { awaitCancellation() } finally { sub?.cancel() }
+                }
+        }
+
         setContent {
             CompositionLocalProvider(LocalSettings provides settings, LocalHa provides ha) {
                 MaterialTheme(colorScheme = darkColorScheme(primary = Amber, onPrimary = CardBg, background = Bg, surface = Bg)) {
@@ -158,7 +183,7 @@ class MainActivity : ComponentActivity() {
                         Home(ha, lovelace, voice, intercom, onReconnect = ::recreate)
                         // Above everything, Settings included, so a call is never missed behind a screen.
                         val call by intercom.state.collectAsStateWithLifecycle()
-                        call?.let { IntercomOverlay(it, onAnswer = intercom::answer, onHangup = intercom::hangup, onTalk = intercom::talk) }
+                        call?.let { IntercomOverlay(it, intercom) }
                     }
                 }
             }
@@ -207,6 +232,19 @@ class MainActivity : ComponentActivity() {
     private fun reportMotion(on: Boolean) = report(Sensor("camera_motion", "Camera motion", on, "motion"))
 
     private var wake: WakeWordListener? = null
+
+    private fun onPush(message: String, data: JSONObject) {
+        val ic = intercom ?: return
+        when (message) {
+            "intercom_call" -> if (!ic.callByName(data.optString("kiosk"))) Log.w("Intercom", "HA asked to call '${data.optString("kiosk")}': not found or busy")
+            "intercom_hangup", "intercom_decline" -> ic.hangup()
+            "intercom_answer" -> ic.answer()
+            "intercom_dnd_on" -> settings.intercomDnd = 1
+            "intercom_dnd_off" -> settings.intercomDnd = 0
+        }
+    }
+
+    private fun minuteTicks() = kotlinx.coroutines.flow.flow { while (true) { emit(Unit); delay(60_000) } }
     private var intercom: Intercom? = null
 
     private fun beep() = ToneGenerator(AudioManager.STREAM_MUSIC, 70).let { t ->
@@ -459,7 +497,10 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, intercom: Inter
 
     if (dialing) {
         val peers by intercom.peers.collectAsStateWithLifecycle()
-        IntercomPicker(peers, onPick = { dialing = false; intercom.call(it) }, onDismiss = { dialing = false })
+        IntercomPicker(
+            peers, canAnnounce = intercom.canTalk(),
+            onPick = { dialing = false; intercom.call(it) }, onAnnounce = { dialing = false; intercom.announce() }, onDismiss = { dialing = false },
+        )
     }
 
     pinFor?.let { action ->

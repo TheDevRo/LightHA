@@ -276,6 +276,20 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 }
                 Toggle("Make calls", settings.intercomCall) { on -> if (on) withMic { settings.intercomCall = true } else settings.intercomCall = false }
                 Toggle("Receive calls", settings.intercomReceive) { on -> if (on) withMic { settings.intercomReceive = true } else settings.intercomReceive = false }
+                if (settings.intercomReceive) {
+                    Toggle("Hear announcements", settings.intercomAnnouncements) { settings.intercomAnnouncements = it }
+                    Toggle("Answer automatically", settings.intercomAutoAnswer) { settings.intercomAutoAnswer = it }
+                    if (settings.intercomAutoAnswer) Text(
+                        "Chimes, counts down 3 seconds with Decline on screen, then the caller is heard. Nothing is sent from here until the talk button is held.",
+                        color = TextDim, fontSize = 13.sp,
+                    )
+                    Text("Do not disturb", color = Color.White, fontSize = 15.sp)
+                    Choices(listOf(0 to "Off", 1 to "On", 2 to "Scheduled"), settings.intercomDnd) { settings.intercomDnd = it }
+                    if (settings.intercomDnd == 2) {
+                        HourStepper("From", settings.intercomDndFrom) { settings.intercomDndFrom = it }
+                        HourStepper("Until", settings.intercomDndTo) { settings.intercomDndTo = it }
+                    }
+                }
                 if (settings.intercomCall || settings.intercomReceive) {
                     OutlinedTextField(
                         settings.intercomName, { settings.intercomName = it.take(40) }, label = { Text("This tablet's name") },
@@ -286,6 +300,12 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                     "Make calls puts a call button in the header that lists every tablet with Receive calls on. " +
                         "Receive calls makes this tablet ring when called. With it off nobody can call this tablet. " +
                         "Hold the button to talk. Calls go straight between tablets on your network, and the wake word pauses during a call.",
+                    color = TextDim, fontSize = 13.sp,
+                )
+                if (settings.intercomCall || settings.intercomReceive) Text(
+                    "Home Assistant can place and end calls and set Do not disturb through notify.mobile_app_${Build.MODEL.lowercase().replace(Regex("[^a-z0-9]+"), "_")} " +
+                        "with message intercom_call (data: kiosk: <name>), intercom_hangup, intercom_answer, intercom_decline, intercom_dnd_on or intercom_dnd_off. " +
+                        "Needs Report this tablet to Home Assistant on.",
                     color = TextDim, fontSize = 13.sp,
                 )
             }
@@ -421,3 +441,12 @@ private fun SignInForm(url: String, onSignedIn: (refresh: String, user: String) 
     ) { Text(if (busy) "Signing in…" else "Sign in") }
 }
 
+@Composable
+private fun HourStepper(label: String, hour: Int, set: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        TextButton(onClick = { set((hour + 23) % 24) }) { Text("−", fontSize = 20.sp) }
+        Text("%02d:00".format(hour), color = Color.White, fontSize = 17.sp)
+        TextButton(onClick = { set((hour + 1) % 24) }) { Text("+", fontSize = 20.sp) }
+    }
+}
