@@ -1,5 +1,6 @@
 package home.kiosk
 
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -8,7 +9,17 @@ import android.content.pm.PackageManager
 import android.provider.Settings as AndroidSettings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.viewinterop.AndroidView
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
@@ -75,21 +86,36 @@ fun saverOffset(minute: Long, width: Float, height: Float): Pair<Float, Float> {
     return xs[i] * width to ys[i] * height
 }
 
-/** Black screen with a dim clock that moves each minute. Any tap wakes. */
+/**
+ * The screensaver. [style] 0 and 1: black screen with a dim clock (and [weather] for 1) that moves each minute.
+ * 2: the page at [url] full screen, for photo frames like ImmichFrame. Any tap wakes.
+ */
+@SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun Screensaver(onWake: () -> Unit) {
+fun Screensaver(style: Int, url: String, weather: Entity?, onWake: () -> Unit) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) { delay(60_000 - now % 60_000); now = System.currentTimeMillis() }
     }
-    BoxWithConstraints(
-        Modifier.fillMaxSize().background(Color.Black).pointerInput(Unit) { detectTapGestures { onWake() } },
-    ) {
-        val (x, y) = saverOffset(now / 60_000, maxWidth.value * 0.6f, maxHeight.value * 0.8f)
-        Column(Modifier.offset(x.dp, y.dp)) {
-            Text(SimpleDateFormat("h:mm", Locale.getDefault()).format(Date(now)), color = Color(0xFF6A6F78), fontSize = 72.sp, fontWeight = FontWeight.Light)
-            Text(SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date(now)), color = Color(0xFF4A4F58), fontSize = 18.sp)
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+        if (style == 2 && url.isNotBlank()) AndroidView(
+            factory = { WebView(it).apply { settings.javaScriptEnabled = true; settings.domStorageEnabled = true; webViewClient = WebViewClient(); loadUrl(url) } },
+            onRelease = { it.destroy() },
+            modifier = Modifier.fillMaxSize(),
+        ) else {
+            val (x, y) = saverOffset(now / 60_000, maxWidth.value * 0.6f, maxHeight.value * 0.7f)
+            Column(Modifier.offset(x.dp, y.dp)) {
+                Text(SimpleDateFormat("h:mm", Locale.getDefault()).format(Date(now)), color = Color(0xFF6A6F78), fontSize = 72.sp, fontWeight = FontWeight.Light)
+                Text(SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date(now)), color = Color(0xFF4A4F58), fontSize = 18.sp)
+                if (style == 1 && weather != null) Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(weatherIcon(weather.state), null, tint = Color(0xFF6A6F78), modifier = Modifier.size(32.dp))
+                    val temp = weather.attributes.optDouble("temperature").takeUnless { it.isNaN() }?.let { "${it.roundToInt()}${weather.attributes.optString("temperature_unit", "°")}  " }.orEmpty()
+                    Text(" $temp${weatherText(weather.state)}", color = Color(0xFF6A6F78), fontSize = 22.sp)
+                }
+            }
         }
+        // Over the page too, so a tap wakes instead of clicking the web page.
+        Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { onWake() } })
     }
 }
 

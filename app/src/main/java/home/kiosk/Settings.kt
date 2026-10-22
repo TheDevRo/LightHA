@@ -24,6 +24,12 @@ class Settings(private val prefs: SharedPreferences) {
     /** Minutes without a touch before the screensaver; 0 = never. */
     var screensaverMinutes by int("screensaver_minutes", 0)
     var screensaverBrightness by float("screensaver_brightness", 0.02f)
+    /** What the screensaver shows: 0 clock, 1 clock and weather, 2 a web page ([screensaverUrl]). */
+    var screensaverStyle by int("screensaver_style", 0)
+    /** Weather entity for the weather screensaver; empty = the first one HA has. */
+    var screensaverWeather by string("screensaver_weather", "")
+    /** Page for the web screensaver (ImmichFrame, a photo frame, anything). A path starting with / is on the HA server. */
+    var screensaverUrl by string("screensaver_url", "")
     /** An HA entity the screen follows: wakes when it turns on, sleeps when it turns off. */
     var wakeEntity by string("wake_entity", "")
     /** Wake on motion seen by the tablet's own camera. */
@@ -36,6 +42,8 @@ class Settings(private val prefs: SharedPreferences) {
     var reportSensors by bool("report_sensors", false)
     /** The mobile_app webhook HA handed out when this tablet registered; empty = not registered yet. */
     var mobileWebhook by string("mobile_webhook", "")
+    /** HA's device registry id for this tablet, so Assist timers know where to ring; empty = not looked up yet. */
+    var mobileDeviceId by string("mobile_device_id", "")
     /** Mic button in the header for push-to-talk Assist. */
     var voiceButton by bool("voice_button", false)
     /** On-tablet wake word id from [WAKE_WORDS]; empty = off. */

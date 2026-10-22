@@ -20,6 +20,17 @@ class MobileAppTest {
         assertFalse(charger.registration().has("unit_of_measurement"))
     }
 
+    @Test fun findsThisTabletsDeviceByWebhookPrefix() {
+        val list = org.json.JSONArray("""[
+            {"unique_id":"abc_battery_level","device_id":null},
+            {"unique_id":"other_battery_level","device_id":"d2"},
+            {"unique_id":"abcd_battery_level","device_id":"d3"},
+            {"unique_id":"abc_charger","device_id":"d1"}
+        ]""")
+        assertEquals("d1", MobileApp.deviceIdFor(list, "abc"))
+        assertEquals(null, MobileApp.deviceIdFor(list, "zzz"))
+    }
+
     @Test fun reregisterWhenHaForgotWebhookOrSensor() {
         assertTrue(MobileApp.needsRegistering(""))
         assertTrue(MobileApp.needsRegistering("""{"charger":{"success":false,"error":{"code":"not_registered","message":"x"}}}"""))
