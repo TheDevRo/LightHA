@@ -43,6 +43,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Settings
@@ -104,11 +105,16 @@ class MainActivity : ComponentActivity() {
         val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope, settings.haRefresh).also { this.ha = it }
         val lovelace = Lovelace(ha, lifecycleScope, prefs, java.io.File(filesDir, "gallery.json").takeIf { BuildConfig.DEBUG })
         val voice = Voice(ha, settings.haUrl, lifecycleScope, settings)
+        // An Assist turn holds the mic, so a call coming in then gets "busy".
+        val intercom = Intercom(this, lifecycleScope, settings, busy = { voice.state.value != null }, onRing = ::wakeScreen).also { this.intercom = it }
+        lifecycleScope.launch { snapshotFlow { settings.intercomCall to settings.intercomReceive }.collect { intercom.apply(it.first, it.second) } }
 
-        // Wake word: listens while no Assist turn is running, hands the mic over when it hears its word.
+        // Wake word: listens while no Assist turn or call is running, hands the mic over when it hears its word.
         wake = WakeWordListener(this, onMicBroken = { settings.micBroken = true }) { wakeScreen(); beep(); voice.start(settings.voicePipeline) }
         lifecycleScope.launch {
-            combine(voice.state, snapshotFlow { (settings.wakeWord to settings.wakeSensitivity).takeIf { !settings.micBroken } }) { turn, w -> w.takeIf { turn == null } }
+            combine(voice.state, intercom.state, snapshotFlow { (settings.wakeWord to settings.wakeSensitivity).takeIf { !settings.micBroken } }) { turn, call, w ->
+                w.takeIf { turn == null && call == null }
+            }
                 .distinctUntilChanged()
                 .collect { w -> if (w == null) wake?.stop() else wake?.start(w.first, w.second) }
         }
@@ -117,7 +123,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             while (true) {
                 delay(5_000)
-                if (voice.state.value == null && settings.wakeWord.isNotEmpty() && !settings.micBroken) wake?.start(settings.wakeWord, settings.wakeSensitivity)
+                if (voice.state.value == null && intercom.state.value == null && settings.wakeWord.isNotEmpty() && !settings.micBroken) wake?.start(settings.wakeWord, settings.wakeSensitivity)
             }
         }
         ha.start()
@@ -148,7 +154,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             CompositionLocalProvider(LocalSettings provides settings, LocalHa provides ha) {
                 MaterialTheme(colorScheme = darkColorScheme(primary = Amber, onPrimary = CardBg, background = Bg, surface = Bg)) {
-                    Box(Modifier.fillMaxSize().background(Bg)) { Home(ha, lovelace, voice, onReconnect = ::recreate) }
+                    Box(Modifier.fillMaxSize().background(Bg)) {
+                        Home(ha, lovelace, voice, intercom, onReconnect = ::recreate)
+                        // Above everything, Settings included, so a call is never missed behind a screen.
+                        val call by intercom.state.collectAsStateWithLifecycle()
+                        call?.let { IntercomOverlay(it, onAnswer = intercom::answer, onHangup = intercom::hangup, onTalk = intercom::talk) }
+                    }
                 }
             }
         }
@@ -156,6 +167,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         wake?.stop()
+        intercom?.apply(call = false, receive = false)
         unregisterReceiver(battery)
         motion?.stop()
         ha?.stop()
@@ -195,6 +207,7 @@ class MainActivity : ComponentActivity() {
     private fun reportMotion(on: Boolean) = report(Sensor("camera_motion", "Camera motion", on, "motion"))
 
     private var wake: WakeWordListener? = null
+    private var intercom: Intercom? = null
 
     private fun beep() = ToneGenerator(AudioManager.STREAM_MUSIC, 70).let { t ->
         t.startTone(ToneGenerator.TONE_PROP_ACK, 150)
@@ -252,7 +265,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, onReconnect: () -> Unit) {
+private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, intercom: Intercom, onReconnect: () -> Unit) {
     val settings = LocalSettings.current
     val activity = LocalContext.current as MainActivity
     val states by ha.states.collectAsStateWithLifecycle()
@@ -268,6 +281,7 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, onReconnect: ()
     var saveError by remember { mutableStateOf<String?>(null) }
     var conflict by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf(false) }
+    var dialing by remember { mutableStateOf(false) }
     // First launch of a release build has no server yet: start in Settings.
     var showSettings by remember { mutableStateOf(settings.haUrl.isBlank() || (settings.haToken.isBlank() && settings.haRefresh.isBlank())) }
     var pinFor by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -414,6 +428,7 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, onReconnect: ()
             } else {
                 // Amber while the wake word is listening: the only sign the mic is open (Android 7 shows none).
                 val hearing by wakeListening.collectAsStateWithLifecycle()
+                if (settings.intercomCall) IconButton(onClick = { dialing = true }) { Icon(Icons.Rounded.Call, "Intercom", tint = TextDim) }
                 if (settings.voiceButton || settings.wakeWord.isNotEmpty()) IconButton(onClick = { voice.start(settings.voicePipeline) }) {
                     Icon(Icons.Rounded.Mic, "Ask Assist", tint = if (hearing) Amber else TextDim)
                 }
@@ -441,6 +456,11 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, onReconnect: ()
 
     val talking by voice.state.collectAsStateWithLifecycle()
     talking?.let { VoiceOverlay(it, onClose = voice::stop) }
+
+    if (dialing) {
+        val peers by intercom.peers.collectAsStateWithLifecycle()
+        IntercomPicker(peers, onPick = { dialing = false; intercom.call(it) }, onDismiss = { dialing = false })
+    }
 
     pinFor?.let { action ->
         PinDialog("Enter PIN", onDismiss = { pinFor = null }) { if (it == settings.pin) { pinFor = null; action(); true } else false }

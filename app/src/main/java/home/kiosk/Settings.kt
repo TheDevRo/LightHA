@@ -47,6 +47,12 @@ class Settings(private val prefs: SharedPreferences) {
     var wakeSensitivity by int("wake_sensitivity", 0)
     /** Assist pipeline id; empty = HA's preferred pipeline. */
     var voicePipeline by string("voice_pipeline", "")
+    /** Intercom: call other tablets from the header button. Only listens for their beacons. */
+    var intercomCall by bool("intercom_call", false)
+    /** Intercom: take calls. Opens the call port and announces this tablet on the LAN. Separate from [intercomCall]. */
+    var intercomReceive by bool("intercom_receive", false)
+    /** What other tablets see in their call list. */
+    var intercomName by string("intercom_name", android.os.Build.MODEL)
     /** Empty = no PIN. */
     var pin by string("pin", "")
     private var hidden by string("hidden_views", "")

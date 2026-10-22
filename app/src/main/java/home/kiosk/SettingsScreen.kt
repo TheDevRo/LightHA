@@ -265,6 +265,31 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 }
             }
 
+            Group("Intercom") {
+                val context = LocalContext.current
+                // Calls work without the mic too (listen only), so a refusal still turns the switch on.
+                var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
+                val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { pending?.invoke(); pending = null }
+                fun withMic(set: () -> Unit) {
+                    val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                    if (granted) set() else { pending = set; askMic.launch(Manifest.permission.RECORD_AUDIO) }
+                }
+                Toggle("Make calls", settings.intercomCall) { on -> if (on) withMic { settings.intercomCall = true } else settings.intercomCall = false }
+                Toggle("Receive calls", settings.intercomReceive) { on -> if (on) withMic { settings.intercomReceive = true } else settings.intercomReceive = false }
+                if (settings.intercomCall || settings.intercomReceive) {
+                    OutlinedTextField(
+                        settings.intercomName, { settings.intercomName = it.take(40) }, label = { Text("This tablet's name") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Text(
+                    "Make calls puts a call button in the header that lists every tablet with Receive calls on. " +
+                        "Receive calls makes this tablet ring when called. With it off nobody can call this tablet. " +
+                        "Hold the button to talk. Calls go straight between tablets on your network, and the wake word pauses during a call.",
+                    color = TextDim, fontSize = 13.sp,
+                )
+            }
+
             Group("Display") {
                 Toggle("Keep screen on", settings.keepScreenOn) { settings.keepScreenOn = it }
                 Toggle("Fullscreen (hide status and navigation bars)", settings.fullscreen) { settings.fullscreen = it }
