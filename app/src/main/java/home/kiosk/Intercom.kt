@@ -9,6 +9,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
+import android.os.SystemClock
 import android.media.MediaRecorder
 import android.media.ToneGenerator
 import android.util.Log
@@ -145,8 +146,7 @@ fun parsePairs(json: String): Map<String, Paired> = runCatching {
  *  - `{kind: call|announce, id, name, nonce}`: the callee answers `{nonce, proof}` (or `{status: unpaired}`), the
  *    caller answers `{proof}`. Then the callee says `ringing`, `listening` (announcement), `busy`, `dnd` or `off`,
  *    and `answer` or `decline` for a call. After that both sides send AES-GCM sealed 20 ms frames of 16 kHz mono
- *    PCM16 while their talk button is held. Closing the socket ends it. Push to talk only, so it never needs echo
- *    cancellation.
+ *    PCM16 while their mic is on (held or locked). Closing the socket ends it. Both sides can talk at once.
  */
 class Intercom(private val context: Context, scope: CoroutineScope, private val settings: Settings, private val busy: () -> Boolean, private val onRing: () -> Unit) {
     // A port already taken or a dropped network must never take the app down.
@@ -610,8 +610,8 @@ fun IntercomOverlay(s: CallState, intercom: Intercom) {
                 s.phase != CallPhase.LIVE -> s.note
                 s.announce && !s.outgoing -> "Announcement"
                 !s.canTalk -> "Listen only: this tablet's mic is off."
-                s.talking -> if (s.announce) s.note else "Talking…"
-                else -> if (s.announce) s.note + ". Hold the button to talk." else "Hold the button to talk."
+                s.talking -> (if (s.announce) s.note + ". " else "") + "Mic on. Tap to turn it off."
+                else -> (if (s.announce) s.note + ". " else "") + "Tap to turn the mic on, or hold to talk."
             }
             Text(note, color = TextDim, fontSize = 16.sp, textAlign = TextAlign.Center)
             if (s.code.isNotEmpty()) Text(s.code, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
@@ -628,9 +628,18 @@ fun IntercomOverlay(s: CallState, intercom: Intercom) {
                 CallPhase.LIVE -> {
                     if (s.canTalk) Box(
                         Modifier.size(140.dp).clip(CircleShape).background(if (s.talking) Amber else Chip)
-                            .pointerInput(Unit) { detectTapGestures(onPress = { intercom.talk(true); tryAwaitRelease(); intercom.talk(false) }) },
+                            .pointerInput(Unit) {
+                                // Tap locks the mic on, the next tap turns it off. Holding still talks only while held.
+                                detectTapGestures(onPress = {
+                                    val wasOn = intercom.state.value?.talking == true
+                                    val down = SystemClock.uptimeMillis()
+                                    intercom.talk(true)
+                                    val tapped = tryAwaitRelease() && SystemClock.uptimeMillis() - down < 400
+                                    if (wasOn || !tapped) intercom.talk(false)
+                                })
+                            },
                         contentAlignment = Alignment.Center,
-                    ) { Icon(Icons.Rounded.Mic, "Hold to talk", tint = if (s.talking) CardBg else Color.White, modifier = Modifier.size(56.dp)) }
+                    ) { Icon(Icons.Rounded.Mic, "Talk", tint = if (s.talking) CardBg else Color.White, modifier = Modifier.size(56.dp)) }
                     if (s.announce && !s.outgoing) Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         TextButton(intercom::hangup) { Text("DISMISS") }
                         Button(intercom::callBack) { Text("REPLY") }
