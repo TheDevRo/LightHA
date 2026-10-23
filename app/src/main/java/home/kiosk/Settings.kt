@@ -53,6 +53,8 @@ class Settings(private val prefs: SharedPreferences) {
      * capture). Keeps the mic closed across restarts until a wake word or the Assist button is chosen again.
      */
     var micBroken by bool("mic_broken", false)
+    /** Decode spoken replies as they stream in; off = MediaPlayer, which waits seconds before it starts. */
+    var streamReplies by bool("stream_replies", true)
     /** 1 low, 0 medium, -1 high; see [wakeCutoff]. */
     var wakeSensitivity by int("wake_sensitivity", 0)
     /** Assist pipeline id; empty = HA's preferred pipeline. */

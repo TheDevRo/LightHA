@@ -30,4 +30,27 @@ class VoiceTest {
         assertEquals("Didn't catch that.", s.reply)
         assertEquals(VoicePhase.ERROR, voiceStep(s, ev("""{"type":"run-end"}""")).phase)
     }
+
+    @Test fun mp3FrameHeaders() {
+        assertEquals(Mp3Frame(192, 24000, 1, 576), mp3Frame(0xFF, 0xF3, 0x84, 0xC4)) // MPEG-2, 64 kbps, mono
+        assertEquals(Mp3Frame(384, 24000, 1, 576), mp3Frame(0xFF, 0xF3, 0xC4, 0xC4)) // what Pocket TTS via HA sends
+        assertEquals(Mp3Frame(417, 44100, 2, 1152), mp3Frame(0xFF, 0xFB, 0x90, 0x64)) // MPEG-1, 128 kbps, joint stereo
+        assertEquals(418, mp3Frame(0xFF, 0xFB, 0x92, 0x64)?.length) // padding bit
+        assertEquals(null, mp3Frame(0x49, 0x44, 0x33, 0x04)) // "ID3", not a frame
+        assertEquals(null, mp3Frame(0xFF, 0xEB, 0x90, 0x64)) // reserved version
+        assertEquals(null, mp3Frame(0xFF, 0xFD, 0x90, 0x64)) // Layer II
+        assertEquals(null, mp3Frame(0xFF, 0xFF, 0x90, 0x64)) // Layer I
+        assertEquals(null, mp3Frame(0xFF, 0xFB, 0x00, 0x64)) // free bitrate
+        assertEquals(null, mp3Frame(0xFF, 0xFB, 0xF0, 0x64)) // bad bitrate
+        assertEquals(null, mp3Frame(0xFF, 0xFB, 0x9C, 0x64)) // reserved sample rate
+    }
+
+    @Test fun id3TagSize() {
+        fun head(vararg b: Int) = ByteArray(b.size) { b[it].toByte() }
+        assertEquals(10 + 35, id3Size(head(0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 0x23)))
+        assertEquals(10 + 0x81, id3Size(head(0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 1, 1))) // 7 bits per byte
+        assertEquals(10 + 1 + 10, id3Size(head(0x49, 0x44, 0x33, 4, 0, 0x10, 0, 0, 0, 1))) // footer
+        assertEquals(0, id3Size(head(0xFF, 0xF3, 0xC4, 0xC4, 0, 0, 0, 0, 0, 0)))
+        assertEquals(0, id3Size(head(0x49, 0x44, 0x33)))
+    }
 }

@@ -30,7 +30,7 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
   - **Speak on the tablet:** `message: TTS` with `data: {tts_text: "The washer is done"}`, as with the Companion app. It's spoken in your Assist pipeline's voice and shown in the voice bubble.
   - **Voice timers:** with Sensors on, "set a 10 minute timer" works. HA keeps the timer, and when it finishes the tablet wakes, rings and shows it with a Stop button. Tablets registered before 0.6.0 need one HA restart first, so HA picks up their push channel.
 - **Voice** (Settings → Voice):
-  - **Assist button:** tap the mic in the header and talk. HA's Assist pipeline (pick one, or use your default) hears when you stop, the answer shows on screen, and the reply is spoken.
+  - **Assist button:** tap the mic in the header and talk. HA's Assist pipeline (pick one, or use your default) hears when you stop, the answer shows on screen, and the reply is spoken. The reply starts playing as it streams in, so you hear it about half a second after HA answers (Settings > Voice can switch back to the old player).
   - **Wake word:** Okay Nabu, Hey Jarvis or Hey Mycroft, detected on the tablet with [microWakeWord](https://github.com/OHF-Voice/micro-wake-word) (the engine from the HA Companion app). No audio leaves the tablet until the word is heard. The header mic turns amber while it's listening. Sensitivity is adjustable.
   - Some old ROMs crash Android's audio service whenever the mic records (LineageOS 14.1 on the Fire HD 6 does). LightHA notices, switches the mic off, and says so in Settings.
 - **Intercom** (Settings → Intercom): tablets call each other on your network, with no server and no HA in the path.

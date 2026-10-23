@@ -3,7 +3,11 @@ package home.kiosk
 import android.annotation.SuppressLint
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioTrack
+import android.media.MediaCodec
+import android.media.MediaFormat
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
@@ -45,6 +49,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +63,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONObject
 import kotlin.coroutines.resume
 import kotlin.math.sin
@@ -104,6 +111,7 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
     /** Loudness of the mic while listening, 0..1, for the overlay's bar. */
     val level: StateFlow<Float> = _level
     private var job: Job? = null
+    private val http = OkHttpClient()
 
     fun stop() {
         job?.cancel()
@@ -221,13 +229,111 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
     }
 
     /** Plays the reply and returns when it's done (or failed). */
-    private suspend fun play(url: String) = suspendCancellableCoroutine { cont ->
+    private suspend fun play(url: String) {
+        if (settings.streamReplies) try { if (streamPlay(url)) return } catch (e: CancellationException) { throw e } catch (e: Exception) { Log.w(TAG, "streamed tts: $e") }
+        mediaPlayerPlay(url)
+    }
+
+    /**
+     * Decodes HA's MP3 stream as it arrives and plays it, so speech starts with the first frames. MediaPlayer
+     * buffers seconds of an unknown-length stream first, which for a short reply means the whole clip.
+     * False if nothing played, so [play] can fall back to MediaPlayer.
+     */
+    private suspend fun streamPlay(url: String): Boolean = withContext(Dispatchers.IO) {
+        val call = http.newCall(Request.Builder().url(url).build())
+        coroutineContext[Job]?.invokeOnCompletion { call.cancel() } // unblocks a read when the turn is cut off
+        var codec: MediaCodec? = null
+        var track: AudioTrack? = null
+        var written = 0L
+        try {
+            call.execute().use { r ->
+                if (!r.isSuccessful) return@withContext false
+                val src = r.body!!.source()
+                if (src.request(10)) src.skip(id3Size(src.peek().readByteArray(10)).toLong())
+                val info = MediaCodec.BufferInfo()
+                fun drain(c: MediaCodec, timeoutUs: Long): Boolean { // true at end of stream
+                    while (true) {
+                        val i = c.dequeueOutputBuffer(info, timeoutUs)
+                        if (i == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED || i == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) continue
+                        if (i < 0) return false
+                        if (info.size > 0) {
+                            val t = track ?: speechTrack(c.outputFormat).also { track = it; it.play() }
+                            val pcm = c.getOutputBuffer(i)!!.apply { position(info.offset); limit(info.offset + info.size) }
+                            t.write(pcm, info.size, AudioTrack.WRITE_BLOCKING)
+                            written += info.size / (2 * t.channelCount)
+                        }
+                        c.releaseOutputBuffer(i, false)
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return true
+                    }
+                }
+                var pts = 0L
+                while (src.request(4)) {
+                    val b = src.buffer
+                    val f = mp3Frame(b[0].toInt() and 0xFF, b[1].toInt() and 0xFF, b[2].toInt() and 0xFF, b[3].toInt() and 0xFF)
+                    if (f == null) { src.skip(1); continue } // resync
+                    if (!src.request(f.length.toLong())) break
+                    val frame = src.readByteArray(f.length.toLong())
+                    val c = codec ?: MediaCodec.createDecoderByType("audio/mpeg").also {
+                        it.configure(MediaFormat.createAudioFormat("audio/mpeg", f.sampleRate, f.channels), null, null, 0)
+                        it.start()
+                        codec = it
+                    }
+                    var i = c.dequeueInputBuffer(0)
+                    while (i < 0) { drain(c, 10_000); i = c.dequeueInputBuffer(0) }
+                    c.getInputBuffer(i)!!.apply { clear(); put(frame) }
+                    c.queueInputBuffer(i, 0, frame.size, pts, 0)
+                    pts += f.samples * 1_000_000L / f.sampleRate
+                    drain(c, 0)
+                }
+                codec?.let { c ->
+                    var i = c.dequeueInputBuffer(0)
+                    while (i < 0) { drain(c, 10_000); i = c.dequeueInputBuffer(0) }
+                    c.queueInputBuffer(i, 0, 0, pts, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    val until = SystemClock.elapsedRealtime() + 2_000
+                    while (!drain(c, 10_000) && SystemClock.elapsedRealtime() < until) Unit
+                }
+            }
+            // Return only once the reply has been heard; stop() plays out what's left in the track's buffer. The head
+            // can reset to 0 once a stopped track drains, so also give up after one buffer's worth.
+            track?.let { t ->
+                t.stop()
+                val buffered = 2L * AudioTrack.getMinBufferSize(t.sampleRate, t.channelConfiguration, AudioFormat.ENCODING_PCM_16BIT) / (2 * t.channelCount)
+                val until = SystemClock.elapsedRealtime() + buffered * 1000 / t.sampleRate + 300
+                while (t.playbackHeadPosition < written && SystemClock.elapsedRealtime() < until) delay(20)
+            }
+            written > 0
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "streamed tts: $e")
+            written > 0
+        } finally {
+            runCatching { codec?.stop() }
+            codec?.release()
+            track?.release()
+        }
+    }
+
+    private fun speechTrack(format: MediaFormat): AudioTrack {
+        val rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+        val mask = if (format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO
+        val size = 2 * AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
+        val pcm = AudioFormat.Builder().setSampleRate(rate).setChannelMask(mask).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build()
+        return AudioTrack(speechAttributes(), pcm, size, AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE)
+    }
+
+    private fun speechAttributes(): AudioAttributes {
+        val usage = if (Build.VERSION.SDK_INT >= 26) AudioAttributes.USAGE_ASSISTANT else AudioAttributes.USAGE_MEDIA
+        return AudioAttributes.Builder().setUsage(usage).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
+    }
+
+    /** The old path: MediaPlayer, which waits for a few seconds of audio before it starts. */
+    private suspend fun mediaPlayerPlay(url: String) = suspendCancellableCoroutine { cont ->
         val p = MediaPlayer()
         cont.invokeOnCancellation { p.release() }
         val finish = { if (cont.isActive) { p.release(); cont.resume(Unit) } }
         runCatching {
-            val usage = if (Build.VERSION.SDK_INT >= 26) AudioAttributes.USAGE_ASSISTANT else AudioAttributes.USAGE_MEDIA
-            p.setAudioAttributes(AudioAttributes.Builder().setUsage(usage).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            p.setAudioAttributes(speechAttributes())
             p.setDataSource(url)
             p.setOnPreparedListener { it.start() }
             p.setOnCompletionListener { finish() }
@@ -246,6 +352,32 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
     }
 }
 
+
+/** One MPEG audio Layer III frame header: [length] in bytes including the header, [samples] per channel. */
+data class Mp3Frame(val length: Int, val sampleRate: Int, val channels: Int, val samples: Int)
+
+private val KBPS_V1 = intArrayOf(0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)
+private val KBPS_V2 = intArrayOf(0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160)
+
+/** Parses a Layer III frame header (MPEG-1, 2 or 2.5); null if these four bytes aren't one. */
+fun mp3Frame(b0: Int, b1: Int, b2: Int, b3: Int): Mp3Frame? {
+    if (b0 != 0xFF || b1 and 0xE0 != 0xE0) return null
+    val version = (b1 shr 3) and 3 // 3 = MPEG-1, 2 = MPEG-2, 0 = MPEG-2.5
+    val bitrate = (b2 shr 4) and 0xF
+    val rate = (b2 shr 2) and 3
+    if (version == 1 || (b1 shr 1) and 3 != 1 || bitrate == 0 || bitrate == 15 || rate == 3) return null
+    val v1 = version == 3
+    val sampleRate = intArrayOf(44100, 48000, 32000)[rate] shr (if (v1) 0 else if (version == 2) 1 else 2)
+    val length = (if (v1) 144 else 72) * (if (v1) KBPS_V1 else KBPS_V2)[bitrate] * 1000 / sampleRate + ((b2 shr 1) and 1)
+    return Mp3Frame(length, sampleRate, if ((b3 shr 6) and 3 == 3) 1 else 2, if (v1) 1152 else 576)
+}
+
+/** Bytes taken by the ID3v2 tag that [head] (the stream's first 10 bytes) starts; 0 if there's none. */
+fun id3Size(head: ByteArray): Int {
+    if (head.size < 10 || head[0] != 'I'.code.toByte() || head[1] != 'D'.code.toByte() || head[2] != '3'.code.toByte()) return 0
+    val size = (6..9).fold(0) { n, i -> (n shl 7) or (head[i].toInt() and 0x7F) }
+    return 10 + size + if (head[5].toInt() and 0x10 != 0) 10 else 0 // footer flag
+}
 
 /** RMS of little-endian PCM16, scaled so normal speech fills most of 0..1. */
 fun loudness(pcm: ByteArray, n: Int): Float {
