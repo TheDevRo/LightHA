@@ -102,8 +102,11 @@ class WakeWordListener(private val context: Context, private val onMicBroken: ()
     private fun listen(id: String, sensitivity: Int): Outcome {
         var mic: AudioRecord? = null
         try {
-            val model = WakeModel.parse(id, context.assets.open("wakeword/$id.json").bufferedReader().use { it.readText() })
-            val bytes = context.assets.open("wakeword/$id.tflite").use { it.readBytes() }
+            val slug = id.removePrefix(WakeCatalog.PREFIX)
+            fun read(ext: String) = if (slug == id) context.assets.open("wakeword/$id.$ext").use { it.readBytes() }
+                else WakeCatalog.file(context, slug, ext).readBytes()
+            val model = WakeModel.parse(id, read("json").decodeToString())
+            val bytes = read("tflite")
             val buffer = ByteBuffer.allocateDirect(bytes.size).put(bytes).apply { rewind() }
             MicroWakeWord(buffer, model.stepMs, wakeCutoff(model.cutoff, sensitivity), model.window).use { engine ->
                 val size = maxOf(AudioRecord.getMinBufferSize(16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT), 3200)
