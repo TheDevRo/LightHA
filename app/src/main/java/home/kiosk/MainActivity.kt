@@ -624,7 +624,7 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, intercom: Inter
         IntercomPicker(
             peers, parsePairs(settings.intercomPairs).keys, canAnnounce = intercom.canTalk(),
             onCall = { dialing = false; intercom.call(it) }, onPair = { dialing = false; intercom.pair(it) },
-            onAnnounce = { dialing = false; intercom.announce() }, onDismiss = { dialing = false },
+            onAnnounce = { dialing = false; intercom.announce(it) }, onDismiss = { dialing = false },
         )
     }
 

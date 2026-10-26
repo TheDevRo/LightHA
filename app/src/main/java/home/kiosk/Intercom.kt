@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -38,15 +39,22 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -258,14 +266,17 @@ class Intercom(private val context: Context, scope: CoroutineScope, private val 
         }
     }
 
-    /** One way to every paired tablet. Tablets on Do not disturb, in a call or with announcements off skip it. */
-    fun announce() {
+    /**
+     * One way to every paired tablet, or only the ones in [only]. Tablets on Do not disturb, in a call or with
+     * announcements off skip it.
+     */
+    fun announce(only: Set<String>? = null) {
         if (!idle()) return
         val my = gen.incrementAndGet()
-        _state.value = CallState(CallPhase.CALLING, "Everyone", "Connecting…", announce = true, outgoing = true)
-        val paired = pairs()
+        val targets = announceTargets(_peers.value, pairs().keys, only)
+        _state.value = CallState(CallPhase.CALLING, if (only == null) "Everyone" else targets.joinToString { it.name }, "Connecting…", announce = true, outgoing = true)
         io.launch {
-            val reached = _peers.value.filter { !it.dnd && it.id in paired }.map { p ->
+            val reached = targets.map { p ->
                 async {
                     runCatching {
                         val (s, session) = open(p, "announce")
@@ -655,6 +666,10 @@ fun IntercomOverlay(s: CallState, intercom: Intercom) {
     }
 }
 
+/** Paired tablets that aren't on Do not disturb, narrowed to [only] when it's given. */
+fun announceTargets(peers: List<Peer>, paired: Set<String>, only: Set<String>?) =
+    peers.filter { !it.dnd && it.id in paired && (only == null || it.id in only) }
+
 @Composable
 private fun PickerRow(icon: ImageVector, label: String, sub: String?, onClick: (() -> Unit)?) {
     Row(
@@ -671,22 +686,49 @@ private fun PickerRow(icon: ImageVector, label: String, sub: String?, onClick: (
 }
 
 /**
- * The header's intercom button opens this: Announce to all, every paired tablet that's on, then tablets nearby that
+ * The header's intercom button opens this: Announce to all (or to a chosen few), every paired tablet that's on, then tablets nearby that
  * aren't paired yet with a Pair button.
  */
 @Composable
 fun IntercomPicker(
     peers: List<Peer>, paired: Set<String>, canAnnounce: Boolean,
-    onCall: (Peer) -> Unit, onPair: (Peer) -> Unit, onAnnounce: () -> Unit, onDismiss: () -> Unit,
+    onCall: (Peer) -> Unit, onPair: (Peer) -> Unit, onAnnounce: (Set<String>?) -> Unit, onDismiss: () -> Unit,
 ) {
     val (mine, nearby) = peers.partition { it.id in paired }
+    val reachable = mine.filter { !it.dnd }
+    var picked by remember { mutableStateOf<Set<String>?>(null) } // non-null while choosing who to announce to
+    picked?.let { chosen ->
+        AlertDialog(
+            onDismissRequest = onDismiss, containerColor = CardBg,
+            title = { Text("Announce to", color = Color.White) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    reachable.forEach { p ->
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).toggleable(p.id in chosen, role = Role.Checkbox) { on ->
+                                picked = if (on) chosen + p.id else chosen - p.id
+                            }.padding(vertical = 6.dp, horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Checkbox(p.id in chosen, null, colors = CheckboxDefaults.colors(checkedColor = Amber, checkmarkColor = CardBg))
+                            Text(p.name, color = Color.White, fontSize = 18.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton({ onAnnounce(chosen) }, enabled = reachable.any { it.id in chosen }) { Text("ANNOUNCE") } },
+            dismissButton = { TextButton({ picked = null }) { Text("BACK") } },
+        )
+        return
+    }
     AlertDialog(
         onDismissRequest = onDismiss, containerColor = CardBg,
         title = { Text("Intercom", color = Color.White) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (peers.isEmpty()) Text("Looking for tablets… Turn on Receive calls on another tablet to see it here.", color = TextDim, fontSize = 15.sp)
-                if (mine.isNotEmpty() && canAnnounce) PickerRow(Icons.Rounded.Campaign, "Announce to all", "One way, to every paired tablet", onAnnounce)
+                if (mine.isNotEmpty() && canAnnounce) PickerRow(Icons.Rounded.Campaign, "Announce to all", "One way, to every paired tablet") { onAnnounce(null) }
+                if (reachable.size > 1 && canAnnounce) PickerRow(Icons.Rounded.Campaign, "Announce to…", "Choose which tablets") { picked = reachable.map { it.id }.toSet() }
                 mine.forEach { p ->
                     if (p.dnd) PickerRow(Icons.Rounded.DoNotDisturbOn, p.name, "Do not disturb", null)
                     else PickerRow(Icons.Rounded.Call, p.name, null) { onCall(p) }
