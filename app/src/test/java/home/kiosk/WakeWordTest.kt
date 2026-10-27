@@ -13,6 +13,24 @@ class WakeWordTest {
         }
     }
 
+    @Test fun bundledModelsLookLikeTflite() {
+        WAKE_WORDS.forEach { (id, _) -> assert(WakeCatalog.isTflite(File("src/main/assets/wakeword/$id.tflite").readBytes())) { id } }
+        assert(!WakeCatalog.isTflite("<html>404</html>".padEnd(20_000).toByteArray()))
+    }
+
+    @Test fun catalogKeepsNewestVersionOfEachWord() {
+        fun e(v: Int, slug: String, label: String, esphome: Boolean = false) = """{"source": "microWakeWordsV$v", "slug": "$slug", "label": "$label",
+            "url": "https://x/V$v/$slug${if (esphome) ".wake-bundle" else ""}.json", "model_url": "https://x/V$v/$slug.tflite"
+            ${if (esphome) ", \"esphome_url\": \"https://x/V$v/$slug.esphome.json\"" else ""}}"""
+        val words = WakeCatalog.parse("""{"entries": [${listOf(
+            e(1, "hey_alfred", "Hey Alfred"), e(8, "hey_alfred", "Hey Alfred", esphome = true), e(3, "hey_alfred", "Hey Alfred"),
+            e(2, "achim", "Achim"), e(2, "../evil", "Evil"),
+        ).joinToString()}]}""")
+        assertEquals(listOf("achim", "hey_alfred"), words.map { it.slug })
+        assertEquals("https://x/V8/hey_alfred.esphome.json", words[1].jsonUrl)
+        assertEquals("https://x/V8/hey_alfred.tflite", words[1].modelUrl)
+    }
+
     @Test fun sensitivityNudgesCutoffWithinBounds() {
         assertEquals(0.85f, wakeCutoff(0.85f, 0), 1e-6f)
         assertEquals(0.88f, wakeCutoff(0.85f, 1), 1e-6f)

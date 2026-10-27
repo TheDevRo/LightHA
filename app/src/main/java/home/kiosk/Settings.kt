@@ -44,10 +44,14 @@ class Settings(private val prefs: SharedPreferences) {
     var mobileWebhook by string("mobile_webhook", "")
     /** HA's device registry id for this tablet, so Assist timers know where to ring; empty = not looked up yet. */
     var mobileDeviceId by string("mobile_device_id", "")
+    /** Count down this tablet's running Assist timers in the header. */
+    var showTimers by bool("show_timers", true)
     /** Mic button in the header for push-to-talk Assist. */
     var voiceButton by bool("voice_button", false)
-    /** On-tablet wake word id from [WAKE_WORDS]; empty = off. */
+    /** On-tablet wake word: an id from [WAKE_WORDS], or [WakeCatalog.PREFIX] + a downloaded slug; empty = off. */
     var wakeWord by string("wake_word", "")
+    /** Display name of a downloaded wake word (the bundled ones are named in [WAKE_WORDS]). */
+    var wakeWordLabel by string("wake_word_label", "")
     /**
      * Set when Android's audio service died while recording (LineageOS 14.1 on the Fire HD6 crashes it on any
      * capture). Keeps the mic closed across restarts until a wake word or the Assist button is chosen again.

@@ -5,7 +5,11 @@ LightHA is MIT licensed (see LICENSE). It bundles these third-party files under 
   unmodified, licensed AGPL-3.0. Its source is that repository.
 
 - app/src/main/assets/wakeword/hey_luna.tflite and .json: the Hey Luna microWakeWord model by Tater Totterson
-  (https://github.com/TaterTotterson/Tater-Wake-Words, microWakeWordsV6).
+  (https://github.com/TaterTotterson/Tater-Wake-Words, microWakeWordsV6), MIT licensed
+  (Tater-Wake-Words commit ca39092, "Add MIT license").
+
+LightHA does not bundle the rest of the Tater Wake Words catalog. When you pick one in Settings, the tablet downloads
+that model straight from the Tater-Wake-Words repository, under that repository's terms.
 
 - app/src/main/cpp: the microWakeWord engine from the Home Assistant Android app, Apache-2.0 (see app/src/main/cpp/NOTICE).
 

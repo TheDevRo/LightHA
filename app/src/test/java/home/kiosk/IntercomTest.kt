@@ -12,6 +12,14 @@ class IntercomTest {
         assertEquals(Peer("a1", "Kitchen", "192.168.20.5", 47811, 7, dnd = true), p)
     }
 
+    @Test fun announceGoesOnlyToChosenPairedAwakeTablets() {
+        fun p(id: String, dnd: Boolean = false) = Peer(id, id, "h", 1, 0, dnd)
+        val peers = listOf(p("kitchen"), p("office"), p("bedroom", dnd = true), p("stranger"))
+        val paired = setOf("kitchen", "office", "bedroom")
+        assertEquals(listOf("kitchen", "office"), announceTargets(peers, paired, null).map { it.id })
+        assertEquals(listOf("office"), announceTargets(peers, paired, setOf("office", "bedroom", "stranger")).map { it.id })
+    }
+
     @Test fun strangersIgnored() {
         assertNull(parseBeacon("""{"id":"a1","name":"Kitchen","port":47811}""", "x", 0))
         assertNull(parseBeacon("not json", "x", 0))

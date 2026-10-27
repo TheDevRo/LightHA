@@ -28,16 +28,16 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
 - **Sensors** (Settings → Sensors): the tablet registers as a device through HA's `mobile_app` integration, like the Companion app, and reports battery level, charger plugged in, battery temperature, camera motion (front or back camera), screen (`on`, `screensaver`, `off`), Wi-Fi signal, light level (on tablets with a light sensor), the current view, app memory and when the app started. Works with any account.
   - **Commands** through `notify.mobile_app_<tablet>`, named like the Companion app's so existing automations work: `command_screen_on`, `command_screensaver`, `command_screen_brightness_level` (`data: {command: 0-255}`, or `auto`), `command_webview` (`data: {command: /lovelace/kitchen}`, opens that view) and `command_reload`.
   - **Speak on the tablet:** `message: TTS` with `data: {tts_text: "The washer is done"}`, as with the Companion app. It's spoken in your Assist pipeline's voice and shown in the voice bubble.
-  - **Voice timers:** with Sensors on, "set a 10 minute timer" works. HA keeps the timer, and when it finishes the tablet wakes, rings and shows it with a Stop button. Tablets registered before 0.6.0 need one HA restart first, so HA picks up their push channel.
+  - **Voice timers:** with Sensors on, "set a 10 minute timer" works. Running timers count down in the header (Settings > Voice > Show running timers, on by default). HA keeps the timer, and when it finishes the tablet wakes, rings and shows it with a Stop button. Tablets registered before 0.6.0 need one HA restart first, so HA picks up their push channel.
 - **Voice** (Settings → Voice):
   - **Assist button:** tap the mic in the header and talk. HA's Assist pipeline (pick one, or use your default) hears when you stop, the answer shows on screen, and the reply is spoken. The reply starts playing as it streams in, so you hear it about half a second after HA answers (Settings > Voice can switch back to the old player).
-  - **Wake word:** Okay Nabu, Hey Jarvis or Hey Mycroft, detected on the tablet with [microWakeWord](https://github.com/OHF-Voice/micro-wake-word) (the engine from the HA Companion app). No audio leaves the tablet until the word is heard. The header mic turns amber while it's listening. Sensitivity is adjustable.
+  - **Wake word:** Okay Nabu, Hey Jarvis, Hey Mycroft or Hey Luna built in, or any of about 800 more from [Tater Wake Words](https://github.com/TaterTotterson/Tater-Wake-Words) under **More…** (the one you pick downloads once from GitHub, then works offline). Detected on the tablet with [microWakeWord](https://github.com/OHF-Voice/micro-wake-word) (the engine from the HA Companion app). No audio leaves the tablet until the word is heard. The header mic turns amber while it's listening. Sensitivity is adjustable.
   - Some old ROMs crash Android's audio service whenever the mic records (LineageOS 14.1 on the Fire HD 6 does). LightHA notices, switches the mic off, and says so in Settings.
 - **Intercom** (Settings → Intercom): tablets call each other on your network, with no server and no HA in the path.
   - **Make calls** and **Receive calls** are separate. A tablet with only Make calls on never opens a port or shows up on other tablets, so it can't be called.
   - **Pairing:** tablets see each other, but only paired tablets can call or announce. Tap a nearby tablet to pair, then accept on the other one once both screens show the same 6-digit code. Remove a pairing any time in Settings.
   - **Encrypted:** pairing is an ECDH key exchange, so the pair key never crosses the network. Every call starts with both tablets proving they hold that key, and the audio is AES-GCM encrypted with a fresh key per call. Unpaired tablets are refused before anything rings.
-  - The phone button in the header lists paired tablets, then **Announce to all** (one way, to every paired tablet at once), then nearby tablets to pair with. Tap the big button to lock the mic on (tap again to turn it off), or hold it to talk. Both tablets can talk at once.
+  - The phone button in the header lists paired tablets, then **Announce to all** (one way, to every paired tablet at once) and, with more than one paired tablet, **Announce to…** to tick just the ones you want, then nearby tablets to pair with. Tap the big button to lock the mic on (tap again to turn it off), or hold it to talk. Both tablets can talk at once.
   - Calls ring with Answer and Decline, or **answer automatically** after a chime and a 3 second countdown. Nothing is sent from a tablet until its talk button is held.
   - **Do not disturb:** on, off, or on a schedule (for example 22:00 until 07:00). Callers see it in their list.
   - The wake word pauses for the whole call, and a call that comes in during an Assist turn gets "busy", so the voice assistant and the intercom never fight over the mic.
@@ -139,6 +139,7 @@ Live camera video · map tiles · cards built from JavaScript templates (`button
 | `Voice.kt` | push-to-talk Assist over the WebSocket, reply overlay and playback |
 | `Intercom.kt`, `IntercomCrypto.kt` | tablet-to-tablet calls and announcements: UDP beacon discovery, pairing, authenticated and encrypted TCP audio, call screen |
 | `WakeWord.kt`, `cpp/` | on-tablet wake word: JNI wrapper and the native microWakeWord engine (Apache-2.0, see `cpp/NOTICE`) |
+| `WakeCatalog.kt` | Tater Wake Words catalog: list, download and cache a model |
 
 The pure logic is covered by JVM unit tests: `./gradlew testDebugUnitTest`.
 

@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -257,14 +259,30 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                     val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
                     if (on && !granted) askMic.launch(Manifest.permission.RECORD_AUDIO) else { settings.voiceButton = on; if (on) settings.micBroken = false }
                 }
-                var pendingWake by remember { mutableStateOf("") }
-                val askMicWake = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) { settings.wakeWord = pendingWake; settings.micBroken = false } }
-                Text("Wake word", color = Color.White, fontSize = 15.sp)
-                Choices(listOf(-1 to "Off") + WAKE_WORDS.mapIndexed { i, w -> i to w.second }, WAKE_WORDS.indexOfFirst { it.first == settings.wakeWord }) { i ->
-                    val id = WAKE_WORDS.getOrNull(i)?.first.orEmpty()
-                    val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-                    if (id.isNotEmpty() && !granted) { pendingWake = id; askMicWake.launch(Manifest.permission.RECORD_AUDIO) } else { settings.wakeWord = id; if (id.isNotEmpty()) settings.micBroken = false }
+                var pendingWake by remember { mutableStateOf("" to "") }
+                val askMicWake = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+                    if (it) { settings.wakeWord = pendingWake.first; settings.wakeWordLabel = pendingWake.second; settings.micBroken = false }
                 }
+                fun setWake(id: String, label: String) {
+                    val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                    if (id.isNotEmpty() && !granted) { pendingWake = id to label; askMicWake.launch(Manifest.permission.RECORD_AUDIO) }
+                    else { settings.wakeWord = id; settings.wakeWordLabel = label; if (id.isNotEmpty()) settings.micBroken = false }
+                }
+                var browsing by remember { mutableStateOf(false) }
+                val downloaded = settings.wakeWord.startsWith(WakeCatalog.PREFIX)
+                Text("Wake word", color = Color.White, fontSize = 15.sp)
+                Choices(
+                    listOf(-1 to "Off") + WAKE_WORDS.mapIndexed { i, w -> i to w.second } +
+                        (if (downloaded) listOf(100 to settings.wakeWordLabel) else emptyList()) + (101 to "More…"),
+                    if (downloaded) 100 else WAKE_WORDS.indexOfFirst { it.first == settings.wakeWord },
+                ) { i ->
+                    when (i) {
+                        100 -> {}
+                        101 -> browsing = true
+                        else -> setWake(WAKE_WORDS.getOrNull(i)?.first.orEmpty(), "")
+                    }
+                }
+                if (browsing) WakeWordBrowser(onPick = { w -> browsing = false; setWake(WakeCatalog.PREFIX + w.slug, w.label) }, onDismiss = { browsing = false })
                 val wakeProblem by wakeError.collectAsStateWithLifecycle()
                 (if (settings.micBroken) Voice.MIC_BROKEN else wakeProblem.takeIf { settings.wakeWord.isNotEmpty() })
                     ?.let { Text(it, color = Color(0xFFE57373), fontSize = 13.sp) }
@@ -291,6 +309,8 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                     ) { settings.voicePipeline = pipelines.getOrNull(it)?.first.orEmpty() }
                     Text("Say the wake word or tap the mic in the header, then talk. Home Assistant hears when you stop. Set up pipelines under Settings > Voice assistants in Home Assistant.", color = TextDim, fontSize = 13.sp)
                 }
+                Toggle("Show running timers", settings.showTimers) { settings.showTimers = it }
+                Text("Timers set by voice on this tablet count down in the header. Needs Sensors on.", color = TextDim, fontSize = 13.sp)
                 Toggle("Start spoken replies immediately", settings.streamReplies) { settings.streamReplies = it }
                 Text("Turn off if replies sound choppy or don't play.", color = TextDim, fontSize = 13.sp)
             }
@@ -439,6 +459,48 @@ private fun Choices(options: List<Pair<Int, String>>, selected: Int, pick: (Int)
             )
         }
     }
+}
+
+/** Search the Tater Wake Words catalog; [onPick] only gets a word once it's downloaded. */
+@Composable
+private fun WakeWordBrowser(onPick: (WakeCatalog.Word) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var words by remember { mutableStateOf<List<WakeCatalog.Word>?>(null) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    var fetching by remember { mutableStateOf<String?>(null) }
+    var query by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) { runCatching { WakeCatalog.list() }.onSuccess { words = it }.onFailure { problem = "Couldn't load the list: ${it.message}" } }
+    val matches = remember(query, words) { words.orEmpty().filter { query.isBlank() || it.label.contains(query, true) } }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Wake words") },
+        text = {
+            Column {
+                OutlinedTextField(query, { query = it }, placeholder = { Text(words?.let { "Search ${it.size} wake words" } ?: "Search") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                (problem ?: fetching?.let { "Downloading $it…" } ?: "Loading…".takeIf { words == null })
+                    ?.let { Text(it, color = if (problem != null) Color(0xFFE57373) else TextDim, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
+                LazyColumn(Modifier.height(320.dp)) {
+                    items(matches, key = { it.slug }) { w ->
+                        Text(
+                            w.label, color = Color.White, fontSize = 15.sp,
+                            modifier = Modifier.fillMaxWidth().clickable(enabled = fetching == null) {
+                                fetching = w.label; problem = null
+                                scope.launch {
+                                    runCatching { WakeCatalog.download(context, w) }
+                                        .onSuccess { onPick(w) }.onFailure { problem = "Couldn't download ${w.label}: ${it.message}" }
+                                    fetching = null
+                                }
+                            }.padding(vertical = 10.dp),
+                        )
+                    }
+                }
+                Text("From Tater Wake Words. The one you pick downloads once from GitHub, then works offline.", color = TextDim, fontSize = 12.sp)
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL") } },
+    )
 }
 
 /** Username + password, then a 2-factor code if the account has one. [onSignedIn] gets the refresh token. */
