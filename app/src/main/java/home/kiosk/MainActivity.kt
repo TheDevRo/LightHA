@@ -210,6 +210,24 @@ class MainActivity : ComponentActivity() {
                 }
         }
 
+        // Running timers for the header. HA only pushes "finished", so ask after every voice turn (where timers are set
+        // and cancelled), on connect and on finish, and once a minute while any run, in case one changed elsewhere.
+        lifecycleScope.launch {
+            combine(ha.status, snapshotFlow { settings.showTimers to settings.mobileDeviceId }, voice.state.map { it == null }, timerRefresh) { s, (show, dev), idle, _ ->
+                Triple(show && dev.isNotEmpty(), s == Status.CONNECTED && idle, dev)
+            }.collectLatest { (show, ask, dev) ->
+                if (!show) activeTimers.value = emptyList()
+                if (!show || !ask) return@collectLatest
+                while (true) {
+                    runCatching { ha.postJson("/api/intent/handle", JSONObject().put("name", "HassTimerStatus")) }
+                        .onSuccess { activeTimers.value = parseTimers(it, dev, SystemClock.elapsedRealtime()) }
+                        .onFailure { Log.w("Timers", "status failed: $it") }
+                    if (activeTimers.value.isEmpty()) break
+                    delay(60_000)
+                }
+            }
+        }
+
         setContent {
             CompositionLocalProvider(LocalSettings provides settings, LocalHa provides ha) {
                 MaterialTheme(colorScheme = darkColorScheme(primary = Amber, onPrimary = CardBg, background = Bg, surface = Bg)) {
@@ -287,7 +305,7 @@ class MainActivity : ComponentActivity() {
             "TTS" -> voice?.say(data.optString("tts_text"), settings.voicePipeline)
         }
         // HA's own "timer finished" notification for timers started by voice on this tablet.
-        if (data.optString("group") == "timers") ringTimer(timerText(message))
+        if (data.optString("group") == "timers") { ringTimer(timerText(message)); timerRefresh.value++ }
         val ic = intercom ?: return
         when (message) {
             "intercom_call" -> if (!ic.callByName(data.optString("kiosk"))) Log.w("Intercom", "HA asked to call '${data.optString("kiosk")}': not found or busy")
@@ -303,6 +321,8 @@ class MainActivity : ComponentActivity() {
     /** The finished timer on screen ("10:00:00 timer finished"); null when none is ringing. */
     private val timerAlert = MutableStateFlow<String?>(null)
     private var ringing: Job? = null
+    /** Bumped to re-read [activeTimers] from HA. */
+    private val timerRefresh = MutableStateFlow(0)
 
     /** Wakes the screen and rings the alarm sound until Stop, or for two minutes. */
     private fun ringTimer(message: String) {
@@ -584,6 +604,8 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, intercom: Inter
             } else {
                 // Amber while the wake word is listening: the only sign the mic is open (Android 7 shows none).
                 val hearing by wakeListening.collectAsStateWithLifecycle()
+                val timers by activeTimers.collectAsStateWithLifecycle()
+                TimerChips(timers)
                 if (settings.intercomCall) IconButton(onClick = { dialing = true }) { Icon(Icons.Rounded.Call, "Intercom", tint = TextDim) }
                 if (settings.voiceButton || settings.wakeWord.isNotEmpty()) IconButton(onClick = { voice.start(settings.voicePipeline) }) {
                     Icon(Icons.Rounded.Mic, "Ask Assist", tint = if (hearing) Amber else TextDim)

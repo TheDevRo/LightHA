@@ -44,6 +44,8 @@ class Settings(private val prefs: SharedPreferences) {
     var mobileWebhook by string("mobile_webhook", "")
     /** HA's device registry id for this tablet, so Assist timers know where to ring; empty = not looked up yet. */
     var mobileDeviceId by string("mobile_device_id", "")
+    /** Count down this tablet's running Assist timers in the header. */
+    var showTimers by bool("show_timers", true)
     /** Mic button in the header for push-to-talk Assist. */
     var voiceButton by bool("voice_button", false)
     /** On-tablet wake word: an id from [WAKE_WORDS], or [WakeCatalog.PREFIX] + a downloaded slug; empty = off. */

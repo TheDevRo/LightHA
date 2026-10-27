@@ -309,6 +309,8 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                     ) { settings.voicePipeline = pipelines.getOrNull(it)?.first.orEmpty() }
                     Text("Say the wake word or tap the mic in the header, then talk. Home Assistant hears when you stop. Set up pipelines under Settings > Voice assistants in Home Assistant.", color = TextDim, fontSize = 13.sp)
                 }
+                Toggle("Show running timers", settings.showTimers) { settings.showTimers = it }
+                Text("Timers set by voice on this tablet count down in the header. Needs Sensors on.", color = TextDim, fontSize = 13.sp)
                 Toggle("Start spoken replies immediately", settings.streamReplies) { settings.streamReplies = it }
                 Text("Turn off if replies sound choppy or don't play.", color = TextDim, fontSize = 13.sp)
             }
