@@ -10,6 +10,14 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
+    <!-- command_launch_app: Android 11+ only sees other apps' launchers when asked for here. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <!-- HA is plain http on the LAN -->
     <application
         android:label="LightHA"
@@ -48,6 +56,17 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Screen off: only active once allowed in Settings → Kiosk. -->
+        <receiver
+            android:name=".ScreenAdmin"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data android:name="android.app.device_admin" android:resource="@xml/screen_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
             </intent-filter>
         </receiver>
     </application>

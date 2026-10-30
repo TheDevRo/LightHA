@@ -1,5 +1,6 @@
 package home.kiosk
 
+import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -8,7 +9,9 @@ import android.util.Log
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import android.media.AudioManager
 import android.media.MediaPlayer
+import android.os.Build
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
@@ -91,6 +94,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Job
@@ -154,16 +158,30 @@ class MainActivity : ComponentActivity() {
         ha.start()
 
         // Follow the chosen entity even while Android's own screensaver (e.g. ImmichFrame) covers the app,
-        // when Compose is paused: on wakes the screen and keeps it on, off hands it back to the system timeout.
+        // when Compose is paused: on wakes the screen and keeps it on (not outside active hours), off sleeps it.
         lifecycleScope.launch {
             ha.states.map { it[settings.wakeEntity]?.let { e -> followAction(e, Long.MAX_VALUE, busy = false) } }
                 .distinctUntilChanged()
                 .collect { on ->
                     if (on == null) return@collect
                     followOn = on
-                    if (on) wakeScreen()
+                    if (on && !offHours()) wakeScreen()
                     applyWindow()
+                    if (!on && idleMs() >= 60_000) sleep() // the minute's grace followAction gives the in-app screensaver
                 }
+        }
+        // Active hours: wake when they start, sleep when they end, and sleep again after an idle minute in between.
+        lifecycleScope.launch {
+            var wasOff: Boolean? = null
+            while (true) {
+                val off = offHours()
+                if (off != wasOff) {
+                    applyWindow()
+                    if (off) sleep() else if (wasOff == true) { wakeScreen(); commands.tryEmit("command_screen_on" to JSONObject()) }
+                    wasOff = off
+                } else if (off && awake() && idleMs() >= 60_000 && voice.state.value == null && intercom.state.value == null && timerAlert.value == null) sleep()
+                delay(15_000)
+            }
         }
         lifecycleScope.launch { snapshotFlow { settings.cameraMotion to settings.motionCamera }.collect { applyMotion() } }
 
@@ -178,6 +196,9 @@ class MainActivity : ComponentActivity() {
         registerReceiver(screen, IntentFilter().apply {
             listOf(Intent.ACTION_SCREEN_ON, Intent.ACTION_SCREEN_OFF, Intent.ACTION_DREAMING_STARTED, Intent.ACTION_DREAMING_STOPPED).forEach(::addAction)
         })
+        // Not exported: still gets this system broadcast, and Android 14 requires choosing for non-protected ones.
+        ContextCompat.registerReceiver(this, volume, IntentFilter("android.media.VOLUME_CHANGED_ACTION"), ContextCompat.RECEIVER_NOT_EXPORTED)
+        reportVolume()
         (getSystemService(SENSOR_SERVICE) as SensorManager).run {
             getDefaultSensor(android.hardware.Sensor.TYPE_LIGHT)?.let { registerListener(light, it, SensorManager.SENSOR_DELAY_NORMAL) }
         }
@@ -250,6 +271,7 @@ class MainActivity : ComponentActivity() {
         intercom?.apply(call = false, receive = false)
         unregisterReceiver(battery)
         unregisterReceiver(screen)
+        unregisterReceiver(volume)
         (getSystemService(SENSOR_SERVICE) as SensorManager).unregisterListener(light)
         motion?.stop()
         ha?.stop()
@@ -262,7 +284,7 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) applyWindow()
     }
 
-    /** True while the followed entity is on: keeps the screen awake like [Settings.keepScreenOn]. */
+    /** True while the followed entity is on: keeps the screen awake like [Settings.keepScreenOn], within active hours. */
     private var followOn = false
 
     private var motion: CameraMotion? = null
@@ -279,8 +301,7 @@ class MainActivity : ComponentActivity() {
 
     /** Wake, then report binary_sensor.kiosk_<device>_motion to HA: on now, off after a quiet minute. */
     private fun onMotion() {
-        wakeScreen()
-        lastMotion.value = SystemClock.elapsedRealtime()
+        if (!offHours()) { wakeScreen(); lastMotion.value = SystemClock.elapsedRealtime() }
         if (motionOff?.isActive != true) reportMotion(true)
         motionOff?.cancel()
         motionOff = lifecycleScope.launch { delay(60_000); reportMotion(false) }
@@ -301,6 +322,11 @@ class MainActivity : ComponentActivity() {
             "command_screen_on" -> { wakeScreen(); commands.tryEmit(message to data) }
             "command_screensaver", "command_webview" -> commands.tryEmit(message to data)
             "command_screen_brightness_level" -> settings.brightness = data.optString("command").toIntOrNull()?.let { (it / 255f).coerceIn(0.05f, 1f) } ?: -1f
+            "command_screen_off" -> if (!ScreenOff.lock(this)) { Log.w("MobileApp", "screen off needs Settings > Kiosk > Allow turning the screen off"); ScreenOff.dream(this) }
+            "command_keep_screen_on" -> { settings.keepScreenOn = data.optString("command") == "turn_on"; applyWindow() }
+            "command_volume_level" -> setVolume(data.optString("media_stream", "music_stream"), data.optString("command").toIntOrNull())
+            "command_launch_app" -> packageManager.getLaunchIntentForPackage(data.optString("package_name"))
+                ?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } ?: Log.w("MobileApp", "no app '${data.optString("package_name")}' to launch")
             "command_reload" -> recreate()
             "TTS" -> voice?.say(data.optString("tts_text"), settings.voicePipeline)
         }
@@ -382,6 +408,55 @@ class MainActivity : ComponentActivity() {
     private fun wakeScreen() = (getSystemService(POWER_SERVICE) as PowerManager)
         .newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE, "kiosk:follow").acquire(3_000)
 
+    private var lastTouch = SystemClock.elapsedRealtime()
+    private fun idleMs() = SystemClock.elapsedRealtime() - lastTouch
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        lastTouch = SystemClock.elapsedRealtime()
+        return super.dispatchTouchEvent(ev)
+    }
+
+    /** Outside the active hours: only the wake word, calls and timers wake the screen. */
+    fun offHours() = offHours(settings.activeHours, settings.activeFrom, settings.activeTo,
+        java.util.Calendar.getInstance().run { get(java.util.Calendar.HOUR_OF_DAY) * 60 + get(java.util.Calendar.MINUTE) })
+
+    private fun awake() = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive && !dreaming && !saverActive
+
+    /** The chosen sleep: the screen off, or the screensaver (Android's now if the ROM allows, and the in-app one). */
+    private fun sleep() {
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && !dreaming) return // another app is in front
+        if (settings.sleepAction == 1 && ScreenOff.lock(this)) return
+        if (!dreaming) { commands.tryEmit("command_screensaver" to JSONObject()); ScreenOff.dream(this) }
+    }
+
+    /** [level] is a step on the stream's own scale (music is usually 0-15), as in the Companion app. */
+    private fun setVolume(stream: String, level: Int?) {
+        val s = STREAMS[stream] ?: run { Log.w("MobileApp", "unknown media_stream '$stream'"); return }
+        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+        // Ring and notification volume throw under Do Not Disturb.
+        if (level != null) runCatching { audio.setStreamVolume(s, level.coerceIn(0, audio.getStreamMaxVolume(s)), 0) }.onFailure { Log.w("MobileApp", "volume: $it") }
+        reportVolume()
+    }
+
+    private fun reportVolume() = report(Sensor("volume_music", "Volume music", (getSystemService(AUDIO_SERVICE) as AudioManager).getStreamVolume(AudioManager.STREAM_MUSIC)))
+
+    private val volume = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = reportVolume()
+    }
+
+    /**
+     * After a device-admin screen off, wake straight to the dashboard instead of the swipe lock screen.
+     * Only when no PIN, pattern or password is set: those still ask.
+     */
+    @Suppress("DEPRECATION")
+    private fun overLockScreen(dismiss: Boolean) {
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
+        val over = ScreenOff.allowed(this) && !keyguard.isKeyguardSecure // re-checked, so adding a PIN later takes effect
+        val flags = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+        if (Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(over); if (over && dismiss) keyguard.requestDismissKeyguard(this, null) }
+        else if (over) window.addFlags(flags) else window.clearFlags(flags)
+    }
+
     /** True while the screensaver is showing: it dims the screen to its own brightness. */
     var saverActive = false
         set(v) { field = v; reportScreen() }
@@ -398,6 +473,7 @@ class MainActivity : ComponentActivity() {
             when (intent.action) {
                 Intent.ACTION_DREAMING_STARTED -> dreaming = true
                 Intent.ACTION_DREAMING_STOPPED -> dreaming = false
+                Intent.ACTION_SCREEN_ON -> overLockScreen(dismiss = true)
             }
             reportScreen()
         }
@@ -412,8 +488,9 @@ class MainActivity : ComponentActivity() {
 
     /** Screen-on, brightness and fullscreen from [Settings]. */
     fun applyWindow() {
-        if (settings.keepScreenOn || followOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if ((settings.keepScreenOn || followOn) && !offHours()) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        overLockScreen(dismiss = false)
         window.attributes = window.attributes.apply {
             screenBrightness = when {
                 saverActive -> settings.screensaverBrightness
@@ -519,7 +596,7 @@ private fun Home(ha: HaClient, lovelace: Lovelace, voice: Voice, intercom: Inter
     LaunchedEffect(follow?.state) {
         val busy = draft != null || popup != null || moreInfo != null || sheet || showSettings
         when (followAction(follow, System.currentTimeMillis() - lastTouch[0], busy)) {
-            true -> { saver = false; lastTouch[0] = System.currentTimeMillis() }
+            true -> if (!activity.offHours()) { saver = false; lastTouch[0] = System.currentTimeMillis() }
             false -> saver = true
             null -> {}
         }

@@ -35,4 +35,16 @@ class KioskTest {
         assertNull(followAction(e("light.office_lights", "unavailable"), idle, busy = false))
         assertNull(followAction(null, idle, busy = false)) // nothing chosen
     }
+
+    @Test fun activeHoursByTheMinuteAcrossMidnight() {
+        val (h630, h22) = 6 * 60 + 30 to 22 * 60
+        assertFalse(offHours(true, h630, h22, h630)) // starts on the minute
+        assertTrue(offHours(true, h630, h22, h630 - 1))
+        assertTrue(offHours(true, h630, h22, h22)) // ends on the minute
+        assertFalse(offHours(true, h630, h22, 12 * 60))
+        assertTrue(offHours(true, h22, h630, 12 * 60)) // night shift: on 22:00 until 06:30
+        assertFalse(offHours(true, h22, h630, 2 * 60))
+        assertFalse(offHours(true, h630, h630, 3 * 60)) // from == until: all day, never a dark tablet
+        assertFalse(offHours(false, h630, h22, 3 * 60)) // switched off
+    }
 }

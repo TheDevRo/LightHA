@@ -24,9 +24,27 @@ Your HA dashboard is the source of truth. Edit it in HA on your phone, or on the
   - **Start after reboot:** for when you don't use home-screen mode.
   - **Screensaver:** after a set idle time, at its own brightness. Choose a dim clock that moves every minute to avoid burn-in, the clock with current weather, or any web page full screen (ImmichFrame or another photo frame). Any tap wakes it.
   - **Screen follows an entity:** pick any HA entity (motion, a room's lights, someone home). The screen wakes when it turns on and sleeps when it turns off, including under Android's own screensaver (for example ImmichFrame).
+  - **Active hours:** the screen is on only between two times you pick (to the minute, across midnight is fine). Outside them it sleeps, and only the wake word, intercom calls and finished timers wake it. Motion and the followed entity don't. It goes back to sleep after a minute without touches.
+  - **Screen off:** turn on **Allow turning the screen off** (LightHA becomes a device admin, used only to switch the screen off) and pick what sleeping means for the followed entity and active hours: **Screensaver** (starts Android's screensaver right away where the ROM allows, otherwise after the system timeout as before) or **Screen off**. Without a PIN, pattern or password the screen wakes straight to the dashboard. Turn the switch off before uninstalling: Android won't uninstall a device admin.
   - **Wake on camera motion:** the tablet's camera compares tiny grayscale snapshots once a second (nothing is saved or sent). Motion wakes the screen, and with **Sensors** on it's reported to HA as a camera motion sensor.
-- **Sensors** (Settings → Sensors): the tablet registers as a device through HA's `mobile_app` integration, like the Companion app, and reports battery level, charger plugged in, battery temperature, camera motion (front or back camera), screen (`on`, `screensaver`, `off`), Wi-Fi signal, light level (on tablets with a light sensor), the current view, app memory and when the app started. Works with any account.
-  - **Commands** through `notify.mobile_app_<tablet>`, named like the Companion app's so existing automations work: `command_screen_on`, `command_screensaver`, `command_screen_brightness_level` (`data: {command: 0-255}`, or `auto`), `command_webview` (`data: {command: /lovelace/kitchen}`, opens that view) and `command_reload`.
+- **Sensors** (Settings → Sensors): the tablet registers as a device through HA's `mobile_app` integration, like the Companion app, and reports battery level, charger plugged in, battery temperature, music volume, camera motion (front or back camera), screen (`on`, `screensaver`, `off`), Wi-Fi signal, light level (on tablets with a light sensor), the current view, app memory and when the app started. Works with any account.
+  - **Commands** through `notify.mobile_app_<tablet>`, named like the Companion app's so existing automations work: `command_screen_on`, `command_screensaver`, `command_screen_brightness_level` (`data: {command: 0-255}`, or `auto`), `command_webview` (`data: {command: /lovelace/kitchen}`, opens that view), `command_reload`, `command_keep_screen_on` (`data: {command: turn_on}` or `turn_off`), `command_screen_off` (needs **Allow turning the screen off**, otherwise it starts the screensaver), `command_volume_level` (`data: {media_stream: music_stream, command: 10}`, a step on that stream's own scale, usually 0-15 for music; also `alarm_stream`, `ring_stream`, `notification_stream`, `system_stream`, `call_stream`) and `command_launch_app` (`data: {package_name: <the app's package, the id= in its Play Store link>}`). The music volume is reported as `sensor.<tablet>_volume_music`, in the same steps.
+  - **Battery care:** a wall tablet kept at 100% swells its battery. Apps can't stop charging, but a smart plug can, using the battery sensor:
+
+    ```yaml
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.<tablet>_battery_level
+        above: 80
+        id: full
+      - trigger: numeric_state
+        entity_id: sensor.<tablet>_battery_level
+        below: 20
+    actions:
+      - action: "switch.turn_{{ 'off' if trigger.id == 'full' else 'on' }}"
+        target:
+          entity_id: switch.<tablet_charger_plug>
+    ```
   - **Speak on the tablet:** `message: TTS` with `data: {tts_text: "The washer is done"}`, as with the Companion app. It's spoken in your Assist pipeline's voice and shown in the voice bubble.
   - **Voice timers:** with Sensors on, "set a 10 minute timer" works. Running timers count down in the header (Settings > Voice > Show running timers, on by default). HA keeps the timer, and when it finishes the tablet wakes, rings and shows it with a Stop button. Tablets registered before 0.6.0 need one HA restart first, so HA picks up their push channel.
 - **Voice** (Settings → Voice):

@@ -1,11 +1,14 @@
 package home.kiosk
 
 import android.annotation.SuppressLint
+import android.app.admin.DeviceAdminReceiver
+import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.provider.Settings as AndroidSettings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -77,6 +80,48 @@ object KioskComponents {
     fun startsOnBoot(ctx: Context) = enabled(ctx, boot(ctx))
     fun setStartOnBoot(ctx: Context, on: Boolean) = set(ctx, boot(ctx), on)
 }
+
+/** Device admin, used only for lockNow (screen off). Turned on from Settings → Kiosk. */
+class ScreenAdmin : DeviceAdminReceiver()
+
+/** Screen off and Android's screensaver on demand, which apps have no plain API for. */
+object ScreenOff {
+    private fun admin(ctx: Context) = ComponentName(ctx, ScreenAdmin::class.java)
+    private fun dpm(ctx: Context) = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+
+    fun allowed(ctx: Context) = dpm(ctx).isAdminActive(admin(ctx))
+
+    /** Android's "add device admin" screen for LightHA. */
+    fun ask(ctx: Context) = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin(ctx))
+        .putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Lets LightHA turn the screen off. Nothing else.")
+
+    /** Required before uninstalling, so Settings offers it. */
+    fun remove(ctx: Context) = dpm(ctx).removeActiveAdmin(admin(ctx))
+
+    /** Turns the screen off now; false without device admin. */
+    fun lock(ctx: Context) = allowed(ctx).also { if (it) dpm(ctx).lockNow() }
+
+    /**
+     * Starts Android's screensaver now through SystemUI's "start now" shortcut (in AOSP since 4.2).
+     * Does nothing on ROMs without it; the system timeout still starts the screensaver there.
+     */
+    fun dream(ctx: Context) = runCatching {
+        ctx.startActivity(Intent().setClassName("com.android.systemui", "com.android.systemui.Somnambulator").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.isSuccess
+}
+
+/** command_volume_level's media_stream names, as in the Companion app. */
+val STREAMS = mapOf(
+    "music_stream" to AudioManager.STREAM_MUSIC, "alarm_stream" to AudioManager.STREAM_ALARM, "ring_stream" to AudioManager.STREAM_RING,
+    "notification_stream" to AudioManager.STREAM_NOTIFICATION, "system_stream" to AudioManager.STREAM_SYSTEM,
+    "call_stream" to AudioManager.STREAM_VOICE_CALL, "dtmf_stream" to AudioManager.STREAM_DTMF,
+)
+
+/** True when [now] is in [from] until [to] on a 24 hour clock (any unit), across midnight when from > to. */
+fun inWindow(from: Int, to: Int, now: Int) = if (from <= to) now in from until to else now >= from || now < to
+
+/** Outside active hours [from] until [to], in minutes after midnight. From == until means all day. */
+fun offHours(on: Boolean, from: Int, to: Int, minute: Int) = on && from != to && !inWindow(from, to, minute)
 
 /** Where the screensaver clock sits this minute: walks a fixed path so no pixel stays lit for long (burn-in). */
 fun saverOffset(minute: Long, width: Float, height: Float): Pair<Float, Float> {

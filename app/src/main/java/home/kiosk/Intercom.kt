@@ -119,7 +119,7 @@ fun parseBeacon(text: String, host: String, now: Long): Peer? = runCatching {
 /** Do not disturb [mode]: 0 off, 1 on, 2 from [from] o'clock until [to] o'clock, across midnight when from > to. */
 fun dndAt(mode: Int, from: Int, to: Int, hour: Int) = when (mode) {
     1 -> true
-    2 -> if (from <= to) hour in from until to else hour >= from || hour < to
+    2 -> inWindow(from, to, hour)
     else -> false
 }
 

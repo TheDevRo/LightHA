@@ -1,6 +1,8 @@
 package home.kiosk
 
 import android.Manifest
+import android.app.TimePickerDialog
+import android.text.format.DateFormat
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
@@ -224,6 +226,29 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                     onPick = { settings.wakeEntity = it; picking = false }, onDismiss = { picking = false },
                 )
                 Text("Wakes when it turns on (motion, a room's lights, someone home) and sleeps when it turns off, unless the screen was touched in the last minute.", color = TextDim, fontSize = 13.sp)
+                Toggle("Active hours", settings.activeHours) { settings.activeHours = it }
+                if (settings.activeHours) {
+                    TimeRow("Screen on from", settings.activeFrom) { settings.activeFrom = it }
+                    TimeRow("Until", settings.activeTo) { settings.activeTo = it }
+                    Text(
+                        "Outside these hours the screen sleeps, and only the wake word, intercom calls and finished timers wake it. Motion and the followed entity don't. It sleeps again after a minute without touches.",
+                        color = TextDim, fontSize = 13.sp,
+                    )
+                }
+                var admin by remember { mutableStateOf(ScreenOff.allowed(context)) }
+                val askAdmin = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { admin = ScreenOff.allowed(context) }
+                Toggle("Allow turning the screen off", admin) { on ->
+                    if (on) askAdmin.launch(ScreenOff.ask(context)) else { ScreenOff.remove(context); admin = false; settings.sleepAction = 0 }
+                }
+                Text(
+                    "Makes LightHA a device admin, used only to switch the screen off. Android asks you to turn this off before uninstalling.",
+                    color = TextDim, fontSize = 13.sp,
+                )
+                if (admin) {
+                    Text("When the screen sleeps", color = Color.White, fontSize = 15.sp)
+                    Choices(listOf(0 to "Screensaver", 1 to "Screen off"), settings.sleepAction) { settings.sleepAction = it }
+                    Text("For the followed entity and outside active hours.", color = TextDim, fontSize = 13.sp)
+                }
                 val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { settings.cameraMotion = it }
                 Toggle("Wake on camera motion", settings.cameraMotion) { on ->
                     val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -247,7 +272,7 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
             Group("Sensors") {
                 Toggle("Report this tablet to Home Assistant", settings.reportSensors) { settings.reportSensors = it }
                 Text(
-                    "Adds a ${Build.MODEL} device in Home Assistant with battery, charger, screen, Wi-Fi signal, light level, current view, app memory and start time, plus camera motion when that's on. Home Assistant can also wake the screen, start the screensaver, set brightness, open a view and reload. Works with any account.",
+                    "Adds a ${Build.MODEL} device in Home Assistant with battery, charger, screen, volume, Wi-Fi signal, light level, current view, app memory and start time, plus camera motion when that's on. Home Assistant can also wake the screen or turn it off, start the screensaver, set brightness and volume, open a view or an app and reload. Works with any account.",
                     color = TextDim, fontSize = 13.sp,
                 )
             }
@@ -443,6 +468,21 @@ private fun Toggle(label: String, on: Boolean, set: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().clickable { set(!on) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
         Switch(on, set, colors = SwitchDefaults.colors(checkedTrackColor = Amber, checkedThumbColor = CardBg, uncheckedTrackColor = Chip, uncheckedBorderColor = Chip))
+    }
+}
+
+/** A time of day as minutes after midnight; tap to pick. */
+@Composable
+private fun TimeRow(label: String, minute: Int, set: (Int) -> Unit) {
+    val context = LocalContext.current
+    Row(
+        Modifier.fillMaxWidth().clickable {
+            TimePickerDialog(context, { _, h, m -> set(h * 60 + m) }, minute / 60, minute % 60, DateFormat.is24HourFormat(context)).show()
+        }.padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        Text("%02d:%02d".format(minute / 60, minute % 60), color = Color.White, fontSize = 17.sp)
     }
 }
 
