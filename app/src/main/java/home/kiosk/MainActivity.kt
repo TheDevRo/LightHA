@@ -116,6 +116,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        volumeControlStream = AudioManager.STREAM_MUSIC // hardware buttons move what volume_music reports, not the ringer
         val prefs = getSharedPreferences("kiosk", Context.MODE_PRIVATE)
         settings = Settings(prefs)
         applyWindow()
