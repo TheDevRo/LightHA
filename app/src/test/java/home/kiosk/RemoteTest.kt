@@ -1,5 +1,6 @@
 package home.kiosk
 
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -53,5 +54,11 @@ class RemoteTest {
         val appleText = textService(apple, "hi")!!
         assertEquals("apple_tv" to "set_keyboard_text", appleText.domain to appleText.service)
         assertTrue(appleText.data!!.getString("config_entry_id") == "abc")
+    }
+
+    @Test fun nullAndBlankNamesAreGaps() {
+        val row = JSONArray("""[null, "previous", "", "  ", "play_pause", ["volume_up", null]]""")
+        assertEquals(listOf(true, false, true, true, false, false), (0 until row.length()).map { isGap(row, it) })
+        assertTrue(isGap(row.getJSONArray(5), 1))
     }
 }

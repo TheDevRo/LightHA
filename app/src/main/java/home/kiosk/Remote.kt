@@ -149,6 +149,9 @@ fun remoteAct(card: JSONObject, action: JSONObject?): Act {
 fun customAction(card: JSONObject, name: String): JSONObject? =
     card.optJSONArray("custom_actions")?.objects()?.firstOrNull { it.optString("name") == name }
 
+/** null or a blank name in rows: an empty, button-sized slot, as universal-remote-card leaves it. */
+fun isGap(items: JSONArray, i: Int) = items.isNull(i) || (items.opt(i) as? String)?.isBlank() == true
+
 // ---- UI ----
 
 @Composable
@@ -160,20 +163,25 @@ fun RemoteCard(card: JSONObject, ctx: CardContext) {
         verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         (0 until rows.length()).forEach { r ->
-            val row = rows.optJSONArray(r) ?: return@forEach
-            if (row.length() == 1 && row.isNull(0)) { Spacer(Modifier.height(4.dp)); return@forEach }
+            val row = rows.optJSONArray(r)
+            if (row == null || (0 until row.length()).all { isGap(row, it) }) {
+                if (row != null || isGap(rows, r)) Spacer(Modifier.height(56.dp)) // a blank row, one button tall
+                return@forEach
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                 (0 until row.length()).forEach { i ->
-                    when (val item = row.opt(i)) {
-                        is JSONArray -> Column(verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    val item = row.opt(i)
+                    when {
+                        isGap(row, i) -> Spacer(Modifier.size(56.dp))
+                        item is JSONArray -> Column(verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             (0 until item.length()).forEach { j ->
-                                if (item.isNull(j)) Spacer(Modifier.size(56.dp)) else Element(card, item.optString(j), ctx) { typing = true }
+                                if (isGap(item, j)) Spacer(Modifier.size(56.dp)) else Element(card, item.optString(j), ctx) { typing = true }
                             }
                         }
                         // The touchpad takes whatever width the row's other items leave, like it does in HA.
-                        is String -> if (isTouchpad(card, item)) Box(Modifier.weight(1f).padding(end = 12.dp)) { Element(card, item, ctx) { typing = true } }
-                            else Element(card, item, ctx) { typing = true }
-                        else -> Spacer(Modifier.size(24.dp))
+                        item is String && isTouchpad(card, item) -> Box(Modifier.weight(1f).padding(end = 12.dp)) { Element(card, item, ctx) { typing = true } }
+                        item is String -> Element(card, item, ctx) { typing = true }
+                        else -> Spacer(Modifier.size(56.dp))
                     }
                 }
             }

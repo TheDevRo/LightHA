@@ -32,6 +32,12 @@ class Settings(private val prefs: SharedPreferences) {
     var screensaverUrl by string("screensaver_url", "")
     /** An HA entity the screen follows: wakes when it turns on, sleeps when it turns off. */
     var wakeEntity by string("wake_entity", "")
+    /** How the screen sleeps for [wakeEntity] and outside active hours: 0 Android's screensaver, 1 off (needs [ScreenOff]). */
+    var sleepAction by int("sleep_action", 0)
+    /** Screen on only from [activeFrom] until [activeTo], minutes after midnight. See [offHours]. */
+    var activeHours by bool("active_hours", false)
+    var activeFrom by int("active_from", 7 * 60)
+    var activeTo by int("active_to", 22 * 60)
     /** Wake on motion seen by the tablet's own camera. */
     var cameraMotion by bool("camera_motion", false)
     /** Percent of the picture that must change to count as motion: 15 low, 6 medium, 2 high sensitivity. */
