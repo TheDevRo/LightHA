@@ -70,6 +70,7 @@ import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.coroutines.resume
+import kotlin.math.log10
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -149,6 +150,37 @@ class EndOfSpeech(private val silenceSeconds: Float) {
 }
 
 /**
+ * Keeps the person giving the command and mutes quieter voices further from the tablet. It follows the loudest
+ * speech heard so far in the turn (whoever said the command, normally nearest) and zeroes chunks more than [dropDb]
+ * below it, so neither speech-to-text nor end-of-speech detection hears them. A short hold keeps word endings.
+ */
+class VoiceGate(private val dropDb: Float = 12f) {
+    private val recent = DoubleArray(5) // mean square of the last chunks, ~160 ms
+    private var next = 0
+    private var speakerDb = Float.NEGATIVE_INFINITY
+    private var hold = 0
+
+    /** Mutes the first [n] samples of [pcm] in place unless they're near the speaker's level; true if kept. */
+    fun pass(pcm: ShortArray, n: Int): Boolean {
+        var sum = 0.0
+        for (i in 0 until n) { val v = pcm[i].toDouble(); sum += v * v }
+        recent[next] = sum / maxOf(1, n)
+        next = (next + 1) % recent.size
+        val db = (10 * log10(maxOf(recent.average(), 1.0) / (32768.0 * 32768.0))).toFloat()
+        if (db > speakerDb) speakerDb = db
+        // Until someone has spoken up, nothing is muted: it's only room noise.
+        if (speakerDb < FLOOR_DB || db >= speakerDb - dropDb) hold = HOLD_CHUNKS else if (hold > 0) hold--
+        if (hold == 0) pcm.fill(0, 0, n)
+        return hold > 0
+    }
+
+    private companion object {
+        const val FLOOR_DB = -50f
+        const val HOLD_CHUNKS = 8 // ~250 ms
+    }
+}
+
+/**
  * Push-to-talk Assist: streams the mic to an HA pipeline over the existing WebSocket, shows what was heard and the
  * answer, and plays the spoken reply. HA's own voice detection decides when you've stopped talking, unless
  * finished speaking detection is Relaxed or Aggressive: then the tablet decides, with ESPHome's microVAD model.
@@ -202,7 +234,10 @@ class Voice(
             val sub = ha.subscribe("assist_pipeline/run", {
                 put("start_stage", "stt")
                 put("end_stage", "tts")
-                put("input", JSONObject().put("sample_rate", RATE).apply { if (vad != null) put("no_vad", true) })
+                put("input", JSONObject().put("sample_rate", RATE).apply {
+                    if (vad != null) put("no_vad", true)
+                    settings.noiseSuppression.takeIf { it in 1..4 }?.let { put("noise_suppression_level", it) }
+                })
                 if (pipeline.isNotEmpty()) put("pipeline", pipeline)
                 // Lets HA's timers ("set a 10 minute timer") ring on this tablet; see MobileApp.deviceIdFor.
                 settings.mobileDeviceId.takeIf { it.isNotEmpty() }?.let { put("device_id", it) }
@@ -218,11 +253,13 @@ class Voice(
                 withContext(Dispatchers.IO) {
                     mic.startRecording()
                     val pcm = ShortArray(512) // 32 ms of 16 kHz mono
+                    val gate = if (settings.ignoreDistantVoices) VoiceGate() else null
                     val until = SystemClock.elapsedRealtime() + 15_000
                     while (_state.value?.phase == VoicePhase.LISTENING && SystemClock.elapsedRealtime() < until) {
                         val n = mic.read(pcm, 0, pcm.size)
                         if (n < 0) { settings.micBroken = true; break } // audio service died; see Settings.micBroken
                         if (n > 0) {
+                            gate?.pass(pcm, n) // before anything else hears it, so muted voices don't count as speech
                             val buf = ByteBuffer.allocate(2 * n).order(ByteOrder.LITTLE_ENDIAN).apply { asShortBuffer().put(pcm, 0, n) }.array()
                             ha.sendBinary(byteArrayOf(handler.toByte()) + buf)
                             _level.value = loudness(buf, buf.size)

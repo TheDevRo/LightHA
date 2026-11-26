@@ -2,6 +2,7 @@ package home.kiosk
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VoiceTest {
@@ -82,6 +83,33 @@ class VoiceTest {
         val probs = (List(40) { 0.9f } + List(16) { 0f } + List(40) { 0.9f } + List(200) { 0f }).asSequence()
         assertEquals(40 + 8, chunksUntilDone(EndOfSpeech(0.25f), probs))
         assertEquals(40 + 16 + 40 + 40, chunksUntilDone(EndOfSpeech(1.25f), probs))
+    }
+
+    private fun gateRun(gate: VoiceGate, vararg parts: Pair<Int, Int>): List<Boolean> = parts.flatMap { (amp, chunks) ->
+        List(chunks) { val pcm = ShortArray(512) { amp.toShort() }; gate.pass(pcm, 512).also { kept -> if (!kept) assertTrue(pcm.all { it == 0.toShort() }) } }
+    }
+
+    @Test fun gateLeavesAQuietRoomAlone() {
+        assertTrue(gateRun(VoiceGate(), 30 to 20).all { it })
+    }
+
+    @Test fun gateMutesAQuieterVoiceAfterTheSpeaker() {
+        // You at 8000, then someone 18 dB quieter: kept ~350 ms (smoothing + hold), then muted for good.
+        val kept = gateRun(VoiceGate(), 8000 to 30, 1000 to 30)
+        assertTrue(kept.take(30).all { it })
+        assertEquals(11, kept.drop(30).count { it })
+        assertEquals(41, kept.indexOf(false))
+        assertTrue(kept.drop(41).none { it })
+    }
+
+    @Test fun gateKeepsVoicesNearTheSpeakersLevel() {
+        assertTrue(gateRun(VoiceGate(), 8000 to 30, 4000 to 30).all { it }) // 6 dB quieter: about twice as far
+    }
+
+    @Test fun gateOpensAgainAsSoonAsTheSpeakerResumes() {
+        val kept = gateRun(VoiceGate(), 8000 to 30, 30 to 20, 8000 to 3)
+        assertEquals(false, kept[49])
+        assertEquals(true, kept[50])
     }
 
     @Test fun id3TagSize() {

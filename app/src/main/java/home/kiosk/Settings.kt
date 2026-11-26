@@ -69,6 +69,10 @@ class Settings(private val prefs: SharedPreferences) {
     var wakeSensitivity by int("wake_sensitivity", 0)
     /** Finished speaking detection: 0 default (HA decides), 1 relaxed, -1 aggressive; see [finishedSpeakingSeconds]. */
     var finishedSpeaking by int("finished_speaking", 0)
+    /** Mute voices clearly quieter than whoever started the command (people further away); see [VoiceGate]. */
+    var ignoreDistantVoices by bool("ignore_distant_voices", false)
+    /** HA's Speex noise suppression for Assist audio: 0 off, 1..4 (15 dB per step). */
+    var noiseSuppression by int("noise_suppression", 0)
     /** Assist pipeline id; empty = HA's preferred pipeline. */
     var voicePipeline by string("voice_pipeline", "")
     /** Intercom: call other tablets from the header button. Only listens for their beacons. */

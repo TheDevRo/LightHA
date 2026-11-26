@@ -333,9 +333,18 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                         pipelines.indexOfFirst { it.first == settings.voicePipeline },
                     ) { settings.voicePipeline = pipelines.getOrNull(it)?.first.orEmpty() }
                     Text("Say the wake word or tap the mic in the header, then talk. Home Assistant hears when you stop. Set up pipelines under Settings > Voice assistants in Home Assistant.", color = TextDim, fontSize = 13.sp)
-                    Text("Finished speaking detection", color = Color.White, fontSize = 15.sp)
-                    Choices(listOf(0 to "Default", 1 to "Relaxed", -1 to "Aggressive"), settings.finishedSpeaking) { settings.finishedSpeaking = it }
-                    Text("How long a pause ends what you're saying. Relaxed waits longer, so you can pause mid-sentence. Aggressive answers sooner but may cut you off. Default leaves it to Home Assistant.", color = TextDim, fontSize = 13.sp)
+                    Toggle("Change when listening stops", settings.finishedSpeaking != 0) { settings.finishedSpeaking = if (it) 1 else 0 }
+                    if (settings.finishedSpeaking != 0) {
+                        Choices(listOf(1 to "Relaxed", -1 to "Aggressive"), settings.finishedSpeaking) { settings.finishedSpeaking = it }
+                        Text("Relaxed waits longer for you to finish, so you can pause mid-sentence. Aggressive answers sooner but may cut you off. Off leaves it to Home Assistant.", color = TextDim, fontSize = 13.sp)
+                    }
+                    Toggle("Ignore distant voices", settings.ignoreDistantVoices) { settings.ignoreDistantVoices = it }
+                    if (settings.ignoreDistantVoices) Text("Mutes voices much quieter than yours, like other people talking across the room. Speak up and stay closer to the tablet than they are.", color = TextDim, fontSize = 13.sp)
+                    Toggle("Noise suppression", settings.noiseSuppression != 0) { settings.noiseSuppression = if (it) 2 else 0 }
+                    if (settings.noiseSuppression != 0) {
+                        Choices(listOf(1 to "Low", 2 to "Medium", 3 to "High", 4 to "Max"), settings.noiseSuppression) { settings.noiseSuppression = it }
+                        Text("Home Assistant filters steady noise like fans and hum. It doesn't remove voices. Turn it down if commands are misheard.", color = TextDim, fontSize = 13.sp)
+                    }
                 }
                 Toggle("Show running timers", settings.showTimers) { settings.showTimers = it }
                 Text("Timers set by voice on this tablet count down in the header. Needs Sensors on.", color = TextDim, fontSize = 13.sp)
