@@ -63,6 +63,12 @@ public:
      */
     void reset();
 
+    /**
+     * Mean of the sliding window of output probabilities, 0..1. LightHA addition: lets the microVAD model
+     * report speech continuously (loaded with a cutoff of 1, so it never "detects" and resets).
+     */
+    [[nodiscard]] float meanProbability() const;
+
 private:
     // Tensor arena size for the model interpreter
     static constexpr size_t TENSOR_ARENA_SIZE = 64 * 1024;

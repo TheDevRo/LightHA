@@ -67,6 +67,8 @@ class Settings(private val prefs: SharedPreferences) {
     var streamReplies by bool("stream_replies", true)
     /** 1 low, 0 medium, -1 high; see [wakeCutoff]. */
     var wakeSensitivity by int("wake_sensitivity", 0)
+    /** Finished speaking detection: 0 default (HA decides), 1 relaxed, -1 aggressive; see [finishedSpeakingSeconds]. */
+    var finishedSpeaking by int("finished_speaking", 0)
     /** Assist pipeline id; empty = HA's preferred pipeline. */
     var voicePipeline by string("voice_pipeline", "")
     /** Intercom: call other tablets from the header button. Only listens for their beacons. */

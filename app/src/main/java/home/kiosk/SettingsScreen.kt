@@ -333,6 +333,9 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                         pipelines.indexOfFirst { it.first == settings.voicePipeline },
                     ) { settings.voicePipeline = pipelines.getOrNull(it)?.first.orEmpty() }
                     Text("Say the wake word or tap the mic in the header, then talk. Home Assistant hears when you stop. Set up pipelines under Settings > Voice assistants in Home Assistant.", color = TextDim, fontSize = 13.sp)
+                    Text("Finished speaking detection", color = Color.White, fontSize = 15.sp)
+                    Choices(listOf(0 to "Default", 1 to "Relaxed", -1 to "Aggressive"), settings.finishedSpeaking) { settings.finishedSpeaking = it }
+                    Text("How long a pause ends what you're saying. Relaxed waits longer, so you can pause mid-sentence. Aggressive answers sooner but may cut you off. Default leaves it to Home Assistant.", color = TextDim, fontSize = 13.sp)
                 }
                 Toggle("Show running timers", settings.showTimers) { settings.showTimers = it }
                 Text("Timers set by voice on this tablet count down in the header. Needs Sensors on.", color = TextDim, fontSize = 13.sp)

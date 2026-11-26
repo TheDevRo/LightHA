@@ -13,4 +13,8 @@ that model straight from the Tater-Wake-Words repository, under that repository'
 
 - app/src/main/cpp: the microWakeWord engine from the Home Assistant Android app, Apache-2.0 (see app/src/main/cpp/NOTICE).
 
+- app/src/main/assets/vad/vad.tflite and .json: the microVAD voice activity model by Kevin Ahrendt from ESPHome's
+  micro-wake-word-models (https://github.com/esphome/micro-wake-word-models, commit 40ff33f, models/v2), unmodified,
+  licensed Apache-2.0.
+
 - The Okay Nabu, Hey Jarvis and Hey Mycroft models: see the author fields in app/src/main/assets/wakeword/*.json.

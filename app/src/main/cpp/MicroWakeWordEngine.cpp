@@ -270,6 +270,14 @@ bool MicroWakeWordEngine::checkDetection() const {
     return sum > static_cast<uint32_t>(probabilityCutoff_) * static_cast<uint32_t>(slidingWindowSize_);
 }
 
+float MicroWakeWordEngine::meanProbability() const {
+    uint32_t sum = 0;
+    for (auto prob : recentProbabilities_) {
+        sum += prob;
+    }
+    return static_cast<float>(sum) / (255.0f * static_cast<float>(slidingWindowSize_));
+}
+
 void MicroWakeWordEngine::resetDetectionState() {
     std::fill(recentProbabilities_.begin(), recentProbabilities_.end(), static_cast<uint8_t>(0));
     ignoreWindows_ = -MIN_SLICES_BEFORE_DETECTION;
