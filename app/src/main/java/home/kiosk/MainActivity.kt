@@ -123,7 +123,7 @@ class MainActivity : ComponentActivity() {
 
         val ha = HaClient(settings.haUrl, settings.haToken, lifecycleScope, settings.haRefresh).also { this.ha = it }
         val lovelace = Lovelace(ha, lifecycleScope, prefs, java.io.File(filesDir, "gallery.json").takeIf { BuildConfig.DEBUG })
-        val voice = Voice(ha, settings.haUrl, lifecycleScope, settings, chime = ::chime).also { this.voice = it }
+        val voice = Voice(ha, settings.haUrl, lifecycleScope, settings, assets, chime = ::chime).also { this.voice = it }
         // An Assist turn holds the mic, so a call coming in then gets "busy".
         val intercom = Intercom(this, lifecycleScope, settings, busy = { voice.state.value != null }, onRing = ::wakeScreen).also { this.intercom = it }
         lifecycleScope.launch { snapshotFlow { settings.intercomCall to settings.intercomReceive }.collect { intercom.apply(it.first, it.second) } }

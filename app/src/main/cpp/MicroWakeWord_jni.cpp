@@ -65,6 +65,11 @@ static void nativeReset(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
     engine->reset();
 }
 
+static jfloat nativeProbability(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
+    if (handle == 0) return 0.0f;
+    return reinterpret_cast<MicroWakeWordEngine*>(handle)->meanProbability();
+}
+
 static void nativeDestroy(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
     if (handle == 0) return;
     auto* engine = reinterpret_cast<MicroWakeWordEngine*>(handle);
@@ -75,6 +80,7 @@ static const JNINativeMethod methods[] = {
     {"nativeCreate", "(Ljava/nio/ByteBuffer;IIFI)J", reinterpret_cast<void*>(nativeCreate)},
     {"nativeProcessAudio", "(J[S)Z", reinterpret_cast<void*>(nativeProcessAudio)},
     {"nativeReset", "(J)V", reinterpret_cast<void*>(nativeReset)},
+    {"nativeProbability", "(J)F", reinterpret_cast<void*>(nativeProbability)},
     {"nativeDestroy", "(J)V", reinterpret_cast<void*>(nativeDestroy)},
 };
 

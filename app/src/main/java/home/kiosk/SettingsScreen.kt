@@ -6,7 +6,22 @@ import android.text.format.DateFormat
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.rounded.Call
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Dashboard
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.TabletAndroid
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import kotlinx.coroutines.launch
@@ -81,26 +96,64 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
         }
     }
 
+    // A list of categories, each opening its own page; null = the list. Back returns to the list first.
+    var page by rememberSaveable { mutableStateOf<String?>(null) }
+    BackHandler(enabled = page != null) { page = null }
+    val context = LocalContext.current
+
     Column(Modifier.fillMaxSize().background(Bg)) {
         Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = Color.White) }
-            Text("Settings", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+            IconButton(onClick = { if (page != null) page = null else onClose() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = Color.White) }
+            Text(page ?: "Settings", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
         }
+        key(page) { // each page opens scrolled to the top
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 40.dp).widthIn(max = 640.dp)) {
 
-            Group("Home Assistant") {
+            if (page == null) Group("") {
+                val homeApp = remember { KioskComponents.isHomeApp(context) }
+                val wake = if (settings.wakeWord.startsWith(WakeCatalog.PREFIX)) settings.wakeWordLabel else WAKE_WORDS.firstOrNull { it.first == settings.wakeWord }?.second
+                fun hm(m: Int) = "%02d:%02d".format(m / 60, m % 60)
+                PageRow(Icons.Rounded.Home, PAGE_HA, statusText(status, haVersion, settings)) { page = PAGE_HA }
+                PageRow(
+                    Icons.Rounded.Dashboard, PAGE_DASHBOARD,
+                    (dashboards.firstOrNull { it.urlPath == dashboard }?.title ?: "Default") + (config?.let { " · ${viewsOf(it).size} views" } ?: ""),
+                ) { page = PAGE_DASHBOARD }
+                PageRow(
+                    Icons.Rounded.LightMode, PAGE_SCREEN,
+                    listOfNotNull(
+                        if (settings.screensaverMinutes > 0) "Screensaver after ${settings.screensaverMinutes} min" else "No screensaver",
+                        "Active ${hm(settings.activeFrom)}–${hm(settings.activeTo)}".takeIf { settings.activeHours },
+                    ).joinToString(" · "),
+                ) { page = PAGE_SCREEN }
+                PageRow(
+                    Icons.Rounded.Mic, PAGE_VOICE,
+                    listOfNotNull(wake, "Assist button".takeIf { settings.voiceButton }).joinToString(" · ").ifEmpty { "Off" },
+                ) { page = PAGE_VOICE }
+                PageRow(
+                    Icons.Rounded.Call, PAGE_INTERCOM,
+                    when {
+                        settings.intercomCall && settings.intercomReceive -> "Makes and receives calls"
+                        settings.intercomCall -> "Makes calls"
+                        settings.intercomReceive -> "Receives calls"
+                        else -> "Off"
+                    },
+                ) { page = PAGE_INTERCOM }
+                PageRow(
+                    Icons.Rounded.TabletAndroid, PAGE_TABLET,
+                    listOfNotNull("Home screen".takeIf { homeApp }, "Sensors on".takeIf { settings.reportSensors }, "PIN on".takeIf { settings.pin.isNotEmpty() })
+                        .joinToString(" · ").ifEmpty { "Home screen, sensors, editing, PIN" },
+                ) { page = PAGE_TABLET }
+                PageRow(Icons.Rounded.Info, PAGE_ABOUT, "LightHA ${BuildConfig.VERSION_NAME}") { page = PAGE_ABOUT }
+            }
+
+            if (page == PAGE_HA) Group("") {
                 var url by remember { mutableStateOf(settings.haUrl) }
                 var token by remember { mutableStateOf(settings.haToken) }
                 // Fresh installs default to signing in with an account; tablets already on a token stay on it.
                 var useAccount by remember { mutableStateOf(settings.haToken.isEmpty()) }
                 val scope = rememberCoroutineScope()
                 Text(
-                    when (status) {
-                        Status.CONNECTED -> "Connected" + (haVersion?.let { " · HA $it" } ?: "")
-                        Status.CONNECTING -> "Connecting…"
-                        Status.AUTH_FAILED -> if (settings.haRefresh.isNotEmpty()) "Signed out in Home Assistant. Sign in again." else "Token rejected"
-                        Status.NOT_CONFIGURED -> "Enter your Home Assistant address, then sign in."
-                    },
+                    statusText(status, haVersion, settings),
                     color = if (status == Status.CONNECTED) Color(0xFF81C784) else Color(0xFFE57373), fontSize = 14.sp,
                 )
                 OutlinedTextField(url, { url = it }, label = { Text("Server URL") }, placeholder = { Text("http://homeassistant.local:8123") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
@@ -139,7 +192,11 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 }
             }
 
-            if (dashboards.isNotEmpty()) Group("Dashboard") {
+            if (page == PAGE_DASHBOARD && dashboards.isEmpty() && config == null) Group("") {
+                Text("Connect to Home Assistant first.", color = TextDim, fontSize = 13.sp)
+            }
+
+            if (page == PAGE_DASHBOARD && dashboards.isNotEmpty()) Group("") {
                 dashboards.forEach { d ->
                     Row(Modifier.fillMaxWidth().clickable { lovelace.select(d.urlPath) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(d.title, color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
@@ -148,7 +205,7 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 }
             }
 
-            config?.let { cfg ->
+            if (page == PAGE_DASHBOARD) config?.let { cfg ->
                 Group("Views") {
                     Text("Switched-off views don't get a tab, but cards can still open them.", color = TextDim, fontSize = 13.sp)
                     viewsOf(cfg).forEachIndexed { i, v ->
@@ -166,18 +223,19 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 }
             }
 
-            Group("Kiosk") {
-                val context = LocalContext.current
-                var home by remember { mutableStateOf(KioskComponents.isHomeApp(context)) }
-                var boot by remember { mutableStateOf(KioskComponents.startsOnBoot(context)) }
-                Toggle("Use as home screen", home) { KioskComponents.setHomeApp(context, it); home = it }
-                Text(
-                    if (home) "Pick LightHA in the list that opens, then Home and reboots land on the dashboard. Turn this off and pick your old launcher to leave."
-                    else "Makes the Home button and reboots open the dashboard.",
-                    color = TextDim, fontSize = 13.sp,
-                )
-                Toggle("Start after reboot", boot) { KioskComponents.setStartOnBoot(context, it); boot = it }
-                Spacer(Modifier.height(8.dp))
+            if (page == PAGE_SCREEN) Group("") {
+                Toggle("Keep screen on", settings.keepScreenOn) { settings.keepScreenOn = it }
+                Toggle("Fullscreen (hide status and navigation bars)", settings.fullscreen) { settings.fullscreen = it }
+                Toggle("Use system brightness", settings.brightness < 0) { settings.brightness = if (it) -1f else 0.8f }
+                if (settings.brightness >= 0) {
+                    Slider(
+                        settings.brightness, { settings.brightness = it }, valueRange = 0.05f..1f,
+                        colors = SliderDefaults.colors(thumbColor = Amber, activeTrackColor = Amber, inactiveTrackColor = Chip),
+                    )
+                }
+            }
+
+            if (page == PAGE_SCREEN) Group("Screensaver") {
                 Text("Screensaver after no touches for", color = Color.White, fontSize = 15.sp)
                 Choices(listOf(0 to "Never", 1 to "1 min", 2 to "2 min", 5 to "5 min", 10 to "10 min", 30 to "30 min"), settings.screensaverMinutes) {
                     settings.screensaverMinutes = it
@@ -212,6 +270,9 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                         colors = SliderDefaults.colors(thumbColor = Amber, activeTrackColor = Amber, inactiveTrackColor = Chip),
                     )
                 }
+            }
+
+            if (page == PAGE_SCREEN) Group("Wake and sleep") {
                 var picking by remember { mutableStateOf(false) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -263,13 +324,25 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                         Choices(listOf(1 to "Front", 0 to "Back"), settings.motionCamera) { settings.motionCamera = it }
                     }
                     Text(
-                        "Compares tiny grayscale snapshots once a second. Nothing is saved or sent. Reported to Home Assistant when Sensors is on below.",
+                        "Compares tiny grayscale snapshots once a second. Nothing is saved or sent. Reported to Home Assistant when Report this tablet to Home Assistant is on (This tablet).",
                         color = TextDim, fontSize = 13.sp,
                     )
                 }
             }
 
-            Group("Sensors") {
+            if (page == PAGE_TABLET) Group("") {
+                var home by remember { mutableStateOf(KioskComponents.isHomeApp(context)) }
+                var boot by remember { mutableStateOf(KioskComponents.startsOnBoot(context)) }
+                Toggle("Use as home screen", home) { KioskComponents.setHomeApp(context, it); home = it }
+                Text(
+                    if (home) "Pick LightHA in the list that opens, then Home and reboots land on the dashboard. Turn this off and pick your old launcher to leave."
+                    else "Makes the Home button and reboots open the dashboard.",
+                    color = TextDim, fontSize = 13.sp,
+                )
+                Toggle("Start after reboot", boot) { KioskComponents.setStartOnBoot(context, it); boot = it }
+            }
+
+            if (page == PAGE_TABLET) Group("Sensors") {
                 Toggle("Report this tablet to Home Assistant", settings.reportSensors) { settings.reportSensors = it }
                 Text(
                     "Adds a ${Build.MODEL} device in Home Assistant with battery, charger, screen, volume, Wi-Fi signal, light level, current view, app memory and start time, plus camera motion when that's on. Home Assistant can also wake the screen or turn it off, start the screensaver, set brightness and volume, open a view or an app and reload. Works with any account.",
@@ -277,7 +350,7 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 )
             }
 
-            Group("Voice") {
+            if (page == PAGE_VOICE) Group("") {
                 val context = LocalContext.current
                 val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { settings.voiceButton = it; if (it) settings.micBroken = false }
                 Toggle("Assist button (push to talk)", settings.voiceButton) { on ->
@@ -334,13 +407,31 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                     ) { settings.voicePipeline = pipelines.getOrNull(it)?.first.orEmpty() }
                     Text("Say the wake word or tap the mic in the header, then talk. Home Assistant hears when you stop. Set up pipelines under Settings > Voice assistants in Home Assistant.", color = TextDim, fontSize = 13.sp)
                 }
-                Toggle("Show running timers", settings.showTimers) { settings.showTimers = it }
-                Text("Timers set by voice on this tablet count down in the header. Needs Sensors on.", color = TextDim, fontSize = 13.sp)
-                Toggle("Start spoken replies immediately", settings.streamReplies) { settings.streamReplies = it }
-                Text("Turn off if replies sound choppy or don't play.", color = TextDim, fontSize = 13.sp)
             }
 
-            Group("Intercom") {
+            if (page == PAGE_VOICE && (settings.voiceButton || settings.wakeWord.isNotEmpty())) Group("While you talk") {
+                Toggle("Change when listening stops", settings.finishedSpeaking != 0) { settings.finishedSpeaking = if (it) 1 else 0 }
+                if (settings.finishedSpeaking != 0) {
+                    Choices(listOf(1 to "Relaxed", -1 to "Aggressive"), settings.finishedSpeaking) { settings.finishedSpeaking = it }
+                    Text("Relaxed waits longer for you to finish, so you can pause mid-sentence. Aggressive answers sooner but may cut you off. Off leaves it to Home Assistant.", color = TextDim, fontSize = 13.sp)
+                }
+                Toggle("Ignore distant voices", settings.ignoreDistantVoices) { settings.ignoreDistantVoices = it }
+                if (settings.ignoreDistantVoices) Text("Mutes voices much quieter than yours, like other people talking across the room. Speak up and stay closer to the tablet than they are.", color = TextDim, fontSize = 13.sp)
+                Toggle("Noise suppression", settings.noiseSuppression != 0) { settings.noiseSuppression = if (it) 2 else 0 }
+                if (settings.noiseSuppression != 0) {
+                    Choices(listOf(1 to "Low", 2 to "Medium", 3 to "High", 4 to "Max"), settings.noiseSuppression) { settings.noiseSuppression = it }
+                    Text("Home Assistant filters steady noise like fans and hum. It doesn't remove voices. Turn it down if commands are misheard.", color = TextDim, fontSize = 13.sp)
+                }
+            }
+
+            if (page == PAGE_VOICE) Group("Replies") {
+                Toggle("Start spoken replies immediately", settings.streamReplies) { settings.streamReplies = it }
+                Text("Turn off if replies sound choppy or don't play.", color = TextDim, fontSize = 13.sp)
+                Toggle("Show running timers", settings.showTimers) { settings.showTimers = it }
+                Text("Timers set by voice on this tablet count down in the header. Needs Report this tablet to Home Assistant on (This tablet).", color = TextDim, fontSize = 13.sp)
+            }
+
+            if (page == PAGE_INTERCOM) Group("") {
                 val context = LocalContext.current
                 // Calls work without the mic too (listen only), so a refusal still turns the switch on.
                 var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -398,19 +489,7 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 )
             }
 
-            Group("Display") {
-                Toggle("Keep screen on", settings.keepScreenOn) { settings.keepScreenOn = it }
-                Toggle("Fullscreen (hide status and navigation bars)", settings.fullscreen) { settings.fullscreen = it }
-                Toggle("Use system brightness", settings.brightness < 0) { settings.brightness = if (it) -1f else 0.8f }
-                if (settings.brightness >= 0) {
-                    Slider(
-                        settings.brightness, { settings.brightness = it }, valueRange = 0.05f..1f,
-                        colors = SliderDefaults.colors(thumbColor = Amber, activeTrackColor = Amber, inactiveTrackColor = Chip),
-                    )
-                }
-            }
-
-            Group("Editing & security") {
+            if (page == PAGE_TABLET) Group("Editing & security") {
                 Toggle("Allow editing dashboards on this tablet", settings.allowTabletEditing) { settings.allowTabletEditing = it }
                 var settingPin by remember { mutableStateOf(false) }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
@@ -424,11 +503,42 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
                 if (settingPin) PinDialog(title = "Choose a PIN", onDismiss = { settingPin = false }) { settings.pin = it; settingPin = false; true }
             }
 
-            Group("About") {
+            if (page == PAGE_ABOUT) Group("") {
                 Text("LightHA ${BuildConfig.VERSION_NAME}", color = Color.White, fontSize = 15.sp)
                 Text("github.com/TheDevRo/LightHA", color = TextDim, fontSize = 13.sp)
             }
         }
+        }
+    }
+}
+
+private const val PAGE_HA = "Home Assistant"
+private const val PAGE_DASHBOARD = "Dashboard"
+private const val PAGE_SCREEN = "Screen"
+private const val PAGE_VOICE = "Voice"
+private const val PAGE_INTERCOM = "Intercom"
+private const val PAGE_TABLET = "This tablet"
+private const val PAGE_ABOUT = "About"
+
+private fun statusText(status: Status, haVersion: String?, settings: Settings) = when (status) {
+    Status.CONNECTED -> "Connected" + (haVersion?.let { " · HA $it" } ?: "")
+    Status.CONNECTING -> "Connecting…"
+    Status.AUTH_FAILED -> if (settings.haRefresh.isNotEmpty()) "Signed out in Home Assistant. Sign in again." else "Token rejected"
+    Status.NOT_CONFIGURED -> "Enter your Home Assistant address, then sign in."
+}
+
+/** A category on the main settings list: icon, name, a one-line summary of what's set, and a chevron. */
+@Composable
+private fun PageRow(icon: ImageVector, title: String, summary: String, open: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = open).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(Chip), contentAlignment = Alignment.Center) {
+            Icon(icon, null, tint = Amber, modifier = Modifier.size(20.dp))
+        }
+        Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+            Text(title, color = Color.White, fontSize = 16.sp)
+            Text(summary, color = TextDim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Icon(Icons.Rounded.ChevronRight, null, tint = TextDim)
     }
 }
 
@@ -455,9 +565,11 @@ fun PinDialog(title: String, onDismiss: () -> Unit, onPin: (String) -> Boolean) 
 
 @Composable
 private fun Group(title: String, content: @Composable () -> Unit) {
-    Spacer(Modifier.height(24.dp))
-    Text(title.uppercase(), color = TextDim, fontSize = 12.sp, letterSpacing = 1.5.sp)
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(if (title.isEmpty()) 8.dp else 24.dp))
+    if (title.isNotEmpty()) {
+        Text(title.uppercase(), color = TextDim, fontSize = 12.sp, letterSpacing = 1.5.sp)
+        Spacer(Modifier.height(8.dp))
+    }
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardBg).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         content()
     }

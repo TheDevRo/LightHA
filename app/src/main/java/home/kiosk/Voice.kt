@@ -1,6 +1,7 @@
 package home.kiosk
 
 import android.annotation.SuppressLint
+import android.content.res.AssetManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -66,7 +67,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.coroutines.resume
+import kotlin.math.log10
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -99,11 +103,92 @@ fun voiceStep(s: VoiceState, event: JSONObject): VoiceState {
     }
 }
 
+/** Seconds of silence that end a command, as HA's VadSensitivity: 1 relaxed 1.25, -1 aggressive 0.25, else 0.7. */
+fun finishedSpeakingSeconds(level: Int) = when (level) { 1 -> 1.25f; -1 -> 0.25f; else -> 0.7f }
+
+/**
+ * Decides when a spoken command is over with the timings and thresholds of HA's VoiceCommandSegmenter, so Relaxed
+ * and Aggressive behave as on an ESPHome satellite. [process] takes each chunk's speech probability and returns
+ * false once the command is finished.
+ */
+class EndOfSpeech(private val silenceSeconds: Float) {
+    private var inCommand = false
+    private var speechLeft = SPEECH
+    private var commandLeft = COMMAND - SPEECH
+    private var silenceLeft = silenceSeconds
+    private var resetLeft = RESET
+
+    fun process(chunkSeconds: Float, probability: Float): Boolean {
+        if (!inCommand) {
+            if (probability > 0.2f) {
+                resetLeft = RESET
+                speechLeft -= chunkSeconds
+                if (speechLeft <= 0) { inCommand = true; commandLeft = COMMAND - SPEECH; silenceLeft = silenceSeconds }
+            } else {
+                resetLeft -= chunkSeconds
+                if (resetLeft <= 0) { speechLeft = SPEECH; resetLeft = RESET }
+            }
+        } else if (probability <= 0.5f) {
+            resetLeft = RESET
+            silenceLeft -= chunkSeconds
+            commandLeft -= chunkSeconds
+            if (silenceLeft <= 0 && commandLeft <= 0) return false
+        } else {
+            // Only a full second of speech refills the silence count, as in HA.
+            resetLeft -= chunkSeconds
+            commandLeft -= chunkSeconds
+            if (resetLeft <= 0) { silenceLeft = silenceSeconds; resetLeft = RESET }
+        }
+        return true
+    }
+
+    private companion object {
+        const val SPEECH = 0.3f // speech before the command counts as started
+        const val COMMAND = 1.0f // shortest command
+        const val RESET = 1.0f
+    }
+}
+
+/**
+ * Keeps the person giving the command and mutes quieter voices further from the tablet. It follows the loudest
+ * speech heard so far in the turn (whoever said the command, normally nearest) and zeroes chunks more than [dropDb]
+ * below it, so neither speech-to-text nor end-of-speech detection hears them. A short hold keeps word endings.
+ */
+class VoiceGate(private val dropDb: Float = 12f) {
+    private val recent = DoubleArray(5) // mean square of the last chunks, ~160 ms
+    private var next = 0
+    private var speakerDb = Float.NEGATIVE_INFINITY
+    private var hold = 0
+
+    /** Mutes the first [n] samples of [pcm] in place unless they're near the speaker's level; true if kept. */
+    fun pass(pcm: ShortArray, n: Int): Boolean {
+        var sum = 0.0
+        for (i in 0 until n) { val v = pcm[i].toDouble(); sum += v * v }
+        recent[next] = sum / maxOf(1, n)
+        next = (next + 1) % recent.size
+        val db = (10 * log10(maxOf(recent.average(), 1.0) / (32768.0 * 32768.0))).toFloat()
+        if (db > speakerDb) speakerDb = db
+        // Until someone has spoken up, nothing is muted: it's only room noise.
+        if (speakerDb < FLOOR_DB || db >= speakerDb - dropDb) hold = HOLD_CHUNKS else if (hold > 0) hold--
+        if (hold == 0) pcm.fill(0, 0, n)
+        return hold > 0
+    }
+
+    private companion object {
+        const val FLOOR_DB = -50f
+        const val HOLD_CHUNKS = 8 // ~250 ms
+    }
+}
+
 /**
  * Push-to-talk Assist: streams the mic to an HA pipeline over the existing WebSocket, shows what was heard and the
- * answer, and plays the spoken reply. HA's own voice detection decides when you've stopped talking.
+ * answer, and plays the spoken reply. HA's own voice detection decides when you've stopped talking, unless
+ * finished speaking detection is Relaxed or Aggressive: then the tablet decides, with ESPHome's microVAD model.
  */
-class Voice(private val ha: HaClient, private val baseUrl: String, private val scope: CoroutineScope, private val settings: Settings, private val chime: () -> Unit) {
+class Voice(
+    private val ha: HaClient, private val baseUrl: String, private val scope: CoroutineScope, private val settings: Settings,
+    private val assets: AssetManager, private val chime: () -> Unit,
+) {
     private val _state = MutableStateFlow<VoiceState?>(null)
     /** null = nothing on screen. */
     val state: StateFlow<VoiceState?> = _state
@@ -141,10 +226,18 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
     private suspend fun turn(pipeline: String) {
         run {
             if (settings.micBroken) { fail(MIC_BROKEN); return }
+            // HA's run API has no silence setting, so for Relaxed/Aggressive the tablet ends the command itself and
+            // HA's detection is switched off for this run. If the model won't load, HA decides as usual.
+            val vad = if (settings.finishedSpeaking == 0) null else runCatching { loadVad() }
+                .onFailure { Log.w(TAG, "voice activity model: $it") }.getOrNull()
+            val end = vad?.let { EndOfSpeech(finishedSpeakingSeconds(settings.finishedSpeaking)) }
             val sub = ha.subscribe("assist_pipeline/run", {
                 put("start_stage", "stt")
                 put("end_stage", "tts")
-                put("input", JSONObject().put("sample_rate", RATE))
+                put("input", JSONObject().put("sample_rate", RATE).apply {
+                    if (vad != null) put("no_vad", true)
+                    settings.noiseSuppression.takeIf { it in 1..4 }?.let { put("noise_suppression_level", it) }
+                })
                 if (pipeline.isNotEmpty()) put("pipeline", pipeline)
                 // Lets HA's timers ("set a 10 minute timer") ring on this tablet; see MobileApp.deviceIdFor.
                 settings.mobileDeviceId.takeIf { it.isNotEmpty() }?.let { put("device_id", it) }
@@ -159,14 +252,21 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
                 if (mic.state != AudioRecord.STATE_INITIALIZED) { fail("Microphone unavailable."); return }
                 withContext(Dispatchers.IO) {
                     mic.startRecording()
-                    val buf = ByteArray(1024) // 32 ms of 16 kHz 16-bit mono
+                    val pcm = ShortArray(512) // 32 ms of 16 kHz mono
+                    val gate = if (settings.ignoreDistantVoices) VoiceGate() else null
                     val until = SystemClock.elapsedRealtime() + 15_000
                     while (_state.value?.phase == VoicePhase.LISTENING && SystemClock.elapsedRealtime() < until) {
-                        val n = mic.read(buf, 0, buf.size)
+                        val n = mic.read(pcm, 0, pcm.size)
                         if (n < 0) { settings.micBroken = true; break } // audio service died; see Settings.micBroken
                         if (n > 0) {
-                            ha.sendBinary(byteArrayOf(handler.toByte()) + buf.copyOf(n))
-                            _level.value = loudness(buf, n)
+                            gate?.pass(pcm, n) // before anything else hears it, so muted voices don't count as speech
+                            val buf = ByteBuffer.allocate(2 * n).order(ByteOrder.LITTLE_ENDIAN).apply { asShortBuffer().put(pcm, 0, n) }.array()
+                            ha.sendBinary(byteArrayOf(handler.toByte()) + buf)
+                            _level.value = loudness(buf, buf.size)
+                            if (vad != null && end != null) {
+                                vad.process(if (n == pcm.size) pcm else pcm.copyOf(n))
+                                if (!end.process(n / RATE.toFloat(), vad.probability())) break
+                            }
                         }
                     }
                     _level.value = 0f
@@ -185,9 +285,17 @@ class Voice(private val ha: HaClient, private val baseUrl: String, private val s
                 delay(4_000)
             } finally {
                 mic?.release()
+                vad?.close()
                 sub.cancel()
             }
         }
+    }
+
+    /** ESPHome's microVAD model on the wake word engine. Cutoff 1 so it never "detects"; only [MicroWakeWord.probability] is read. */
+    private fun loadVad(): MicroWakeWord {
+        val model = WakeModel.parse("vad", assets.open("vad/vad.json").use { it.readBytes() }.decodeToString())
+        val bytes = assets.open("vad/vad.tflite").use { it.readBytes() }
+        return MicroWakeWord(ByteBuffer.allocateDirect(bytes.size).put(bytes).apply { rewind() }, model.stepMs, 1f, model.window)
     }
 
     /**

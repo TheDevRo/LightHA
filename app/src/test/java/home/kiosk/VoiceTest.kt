@@ -2,6 +2,7 @@ package home.kiosk
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VoiceTest {
@@ -43,6 +44,72 @@ class VoiceTest {
         assertEquals(null, mp3Frame(0xFF, 0xFB, 0x00, 0x64)) // free bitrate
         assertEquals(null, mp3Frame(0xFF, 0xFB, 0xF0, 0x64)) // bad bitrate
         assertEquals(null, mp3Frame(0xFF, 0xFB, 0x9C, 0x64)) // reserved sample rate
+    }
+
+    @Test fun finishedSpeakingMatchesHa() {
+        assertEquals(0.7f, finishedSpeakingSeconds(0))
+        assertEquals(1.25f, finishedSpeakingSeconds(1))
+        assertEquals(0.25f, finishedSpeakingSeconds(-1))
+    }
+
+    /** Chunks of 32 ms until [process] says the command is over; null if it never does within [max]. */
+    private fun chunksUntilDone(end: EndOfSpeech, probs: Sequence<Float>, max: Int = 1000): Int? {
+        probs.take(max).forEachIndexed { i, p -> if (!end.process(0.032f, p)) return i + 1 }
+        return null
+    }
+
+    private fun speechThenSilence(speechChunks: Int) = generateSequence(0) { it + 1 }.map { if (it < speechChunks) 0.9f else 0f }
+
+    @Test fun silenceAloneNeverEnds() {
+        // HA's segmenter times out after 15 s here; Voice's own 15 s mic limit covers that.
+        assertEquals(null, chunksUntilDone(EndOfSpeech(0.7f), generateSequence { 0f }))
+    }
+
+    @Test fun silenceLengthSetsTheCutOff() {
+        // 1.5 s of speech, then silence: aggressive ends after ~0.25 s of it, default ~0.7 s, relaxed ~1.25 s.
+        val speech = 47
+        assertEquals(speech + 8, chunksUntilDone(EndOfSpeech(0.25f), speechThenSilence(speech)))
+        assertEquals(speech + 22, chunksUntilDone(EndOfSpeech(0.7f), speechThenSilence(speech)))
+        assertEquals(speech + 40, chunksUntilDone(EndOfSpeech(1.25f), speechThenSilence(speech)))
+    }
+
+    @Test fun shortCommandsLastAtLeastASecond() {
+        // 0.4 s of speech: the command still runs a second before silence can end it.
+        assertEquals(32, chunksUntilDone(EndOfSpeech(0.25f), speechThenSilence(13)))
+    }
+
+    @Test fun pauseShorterThanTheSilenceKeepsListening() {
+        // Speech, a 0.5 s pause, then more speech: relaxed keeps listening, aggressive stops in the pause.
+        val probs = (List(40) { 0.9f } + List(16) { 0f } + List(40) { 0.9f } + List(200) { 0f }).asSequence()
+        assertEquals(40 + 8, chunksUntilDone(EndOfSpeech(0.25f), probs))
+        assertEquals(40 + 16 + 40 + 40, chunksUntilDone(EndOfSpeech(1.25f), probs))
+    }
+
+    private fun gateRun(gate: VoiceGate, vararg parts: Pair<Int, Int>): List<Boolean> = parts.flatMap { (amp, chunks) ->
+        List(chunks) { val pcm = ShortArray(512) { amp.toShort() }; gate.pass(pcm, 512).also { kept -> if (!kept) assertTrue(pcm.all { it == 0.toShort() }) } }
+    }
+
+    @Test fun gateLeavesAQuietRoomAlone() {
+        assertTrue(gateRun(VoiceGate(), 30 to 20).all { it })
+    }
+
+    @Test fun gateMutesAQuieterVoiceAfterTheSpeaker() {
+        // You at 8000, then someone 18 dB quieter: kept ~350 ms (smoothing + hold), then muted for good.
+        val kept = gateRun(VoiceGate(), 8000 to 30, 1000 to 30)
+        assertTrue(kept.take(30).all { it })
+        assertEquals(11, kept.drop(30).count { it })
+        assertEquals(41, kept.indexOf(false))
+        assertTrue(kept.drop(41).none { it })
+    }
+
+    @Test fun gateKeepsVoicesNearTheSpeakersLevel() {
+        assertTrue(gateRun(VoiceGate(), 8000 to 30, 4000 to 30).all { it }) // 6 dB quieter: about twice as far
+    }
+
+    @Test fun gateOpensAgainAsSoonAsTheSpeakerResumes() {
+        val kept = gateRun(VoiceGate(), 8000 to 30, 30 to 20, 8000 to 3)
+        assertEquals(false, kept[49])
+        assertEquals(true, kept[50])
     }
 
     @Test fun id3TagSize() {

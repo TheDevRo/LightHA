@@ -48,6 +48,9 @@ class MicroWakeWord(model: ByteBuffer, stepMs: Int, cutoff: Float, window: Int) 
     /** 16 kHz mono PCM; true when the wake word was just heard. */
     fun process(samples: ShortArray) = handle != 0L && nativeProcessAudio(handle, samples)
 
+    /** Mean of the recent output probabilities, 0..1; for the voice activity model, how likely it's speech. */
+    fun probability() = if (handle != 0L) nativeProbability(handle) else 0f
+
     override fun close() {
         if (handle != 0L) nativeDestroy(handle)
         handle = 0
@@ -59,6 +62,7 @@ class MicroWakeWord(model: ByteBuffer, stepMs: Int, cutoff: Float, window: Int) 
         @JvmStatic external fun nativeCreate(model: ByteBuffer, sampleRate: Int, stepMs: Int, cutoff: Float, window: Int): Long
         @JvmStatic external fun nativeProcessAudio(handle: Long, samples: ShortArray): Boolean
         @JvmStatic external fun nativeReset(handle: Long)
+        @JvmStatic external fun nativeProbability(handle: Long): Float
         @JvmStatic external fun nativeDestroy(handle: Long)
     }
 }
