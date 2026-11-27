@@ -228,9 +228,11 @@ class Voice(
             if (settings.micBroken) { fail(MIC_BROKEN); return }
             // HA's run API has no silence setting, so for Relaxed/Aggressive the tablet ends the command itself and
             // HA's detection is switched off for this run. If the model won't load, HA decides as usual.
-            val vad = if (settings.finishedSpeaking == 0) null else runCatching { loadVad() }
+            // Regular (0) is HA's own detection, so only Relaxed/Aggressive run it on the tablet.
+            val level = if (settings.finishedSpeakingOn) settings.finishedSpeaking else 0
+            val vad = if (level == 0) null else runCatching { loadVad() }
                 .onFailure { Log.w(TAG, "voice activity model: $it") }.getOrNull()
-            val end = vad?.let { EndOfSpeech(finishedSpeakingSeconds(settings.finishedSpeaking)) }
+            val end = vad?.let { EndOfSpeech(finishedSpeakingSeconds(level)) }
             val sub = ha.subscribe("assist_pipeline/run", {
                 put("start_stage", "stt")
                 put("end_stage", "tts")

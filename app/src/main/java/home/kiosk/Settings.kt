@@ -67,7 +67,9 @@ class Settings(private val prefs: SharedPreferences) {
     var streamReplies by bool("stream_replies", true)
     /** 1 low, 0 medium, -1 high; see [wakeCutoff]. */
     var wakeSensitivity by int("wake_sensitivity", 0)
-    /** Finished speaking detection: 0 default (HA decides), 1 relaxed, -1 aggressive; see [finishedSpeakingSeconds]. */
+    /** "Change when listening stops" switch; off = HA's own detection whatever [finishedSpeaking] says. */
+    var finishedSpeakingOn by bool("finished_speaking_on", false)
+    /** 1 relaxed, 0 regular (HA's own detection, as before), -1 aggressive; see [finishedSpeakingSeconds]. */
     var finishedSpeaking by int("finished_speaking", 0)
     /** Mute voices clearly quieter than whoever started the command (people further away); see [VoiceGate]. */
     var ignoreDistantVoices by bool("ignore_distant_voices", false)
