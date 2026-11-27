@@ -410,10 +410,10 @@ fun SettingsScreen(settings: Settings, ha: HaClient, lovelace: Lovelace, onRecon
             }
 
             if (page == PAGE_VOICE && (settings.voiceButton || settings.wakeWord.isNotEmpty())) Group("While you talk") {
-                Toggle("Change when listening stops", settings.finishedSpeaking != 0) { settings.finishedSpeaking = if (it) 1 else 0 }
-                if (settings.finishedSpeaking != 0) {
-                    Choices(listOf(1 to "Relaxed", -1 to "Aggressive"), settings.finishedSpeaking) { settings.finishedSpeaking = it }
-                    Text("Relaxed waits longer for you to finish, so you can pause mid-sentence. Aggressive answers sooner but may cut you off. Off leaves it to Home Assistant.", color = TextDim, fontSize = 13.sp)
+                Toggle("Change when listening stops", settings.finishedSpeakingOn) { settings.finishedSpeakingOn = it }
+                if (settings.finishedSpeakingOn) {
+                    Choices(listOf(1 to "Relaxed", 0 to "Regular", -1 to "Aggressive"), settings.finishedSpeaking) { settings.finishedSpeaking = it }
+                    Text("Relaxed waits longer for you to finish, so you can pause mid-sentence. Regular is Home Assistant's own timing, as before. Aggressive answers sooner but may cut you off.", color = TextDim, fontSize = 13.sp)
                 }
                 Toggle("Ignore distant voices", settings.ignoreDistantVoices) { settings.ignoreDistantVoices = it }
                 if (settings.ignoreDistantVoices) Text("Mutes voices much quieter than yours, like other people talking across the room. Speak up and stay closer to the tablet than they are.", color = TextDim, fontSize = 13.sp)
