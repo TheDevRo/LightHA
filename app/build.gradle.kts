@@ -33,13 +33,15 @@ android {
     }
 
     signingConfigs {
-        // Keystore path/password live in local.properties (gitignored); without them, release falls back to debug signing.
-        local.getProperty("release.store")?.let { store ->
+        // Keystore path/password live in local.properties (gitignored), or RELEASE_STORE/RELEASE_PASSWORD in the
+        // release workflow; without them, release falls back to debug signing.
+        val releasePassword = System.getenv("RELEASE_PASSWORD") ?: local.getProperty("release.password")
+        (System.getenv("RELEASE_STORE") ?: local.getProperty("release.store"))?.let { store ->
             create("release") {
                 storeFile = file(store)
-                storePassword = local.getProperty("release.password")
+                storePassword = releasePassword
                 keyAlias = "lightha"
-                keyPassword = local.getProperty("release.password")
+                keyPassword = releasePassword
             }
         }
     }

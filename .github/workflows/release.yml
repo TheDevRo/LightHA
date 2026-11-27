@@ -1,0 +1,59 @@
+# Builds the signed release APK from main and puts it on a draft GitHub release named after versionName.
+# Publishing the draft (which creates the vX.Y.Z tag Obtainium sees) stays a separate, manual step.
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: NDK and CMake for the wake word engine
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" "cmake;4.1.2" > /dev/null
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.LIGHTHA_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then echo "::error::LIGHTHA_KEYSTORE_B64 secret is missing"; exit 1; fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+      - name: Unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+      - name: Signed APK
+        env:
+          RELEASE_STORE: ${{ runner.temp }}/release.jks
+          RELEASE_PASSWORD: ${{ secrets.LIGHTHA_KEYSTORE_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease
+      - name: Check it's signed with the LightHA key, not the debug key
+        run: |
+          signer=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
+          "$signer" verify --print-certs app/build/outputs/apk/release/app-release.apk | tee certs.txt
+          grep -q "CN=LightHA" certs.txt || { echo "::error::APK is not signed with the LightHA release key"; exit 1; }
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)
+          apk="LightHA-$v.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$apk"
+          if gh release view "v$v" --json isDraft --jq .isDraft 2>/dev/null | grep -q false; then
+            echo "::error::v$v is already published; bump versionName first"; exit 1
+          fi
+          if gh release view "v$v" > /dev/null 2>&1; then
+            gh release edit "v$v" --target "$GITHUB_SHA"
+            gh release upload "v$v" "$apk" --clobber
+          else
+            gh release create "v$v" "$apk" --draft --target "$GITHUB_SHA" --title "LightHA $v" --notes "Release notes to follow."
+          fi
+          rm -f "$RUNNER_TEMP/release.jks"
